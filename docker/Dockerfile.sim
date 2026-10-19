@@ -1,0 +1,44 @@
+FROM osrf/ros:jazzy-desktop-full
+
+ARG HOST_UID=1000
+ARG HOST_GID=1000
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    mesa-utils mesa-vulkan-drivers libgl1-mesa-dri libegl1 vainfo \
+    v4l-utils python3-pip python3-opencv python3-numpy \
+    python3-colcon-common-extensions python3-rosdep \
+    ros-jazzy-ros-gz ros-jazzy-gz-ros2-control \
+    ros-jazzy-ros2-control ros-jazzy-ros2-controllers \
+    ros-jazzy-moveit ros-jazzy-rosbridge-suite \
+    && rm -rf /var/lib/apt/lists/*
+
+# Non-root user matching your host UID/GID so files in the repo stay yours
+RUN if id ubuntu >/dev/null 2>&1; then userdel -r ubuntu; fi \
+ && (getent group ${HOST_GID} >/dev/null || groupadd -g ${HOST_GID} dev) \
+ && useradd -m -u ${HOST_UID} -g ${HOST_GID} -s /bin/bash dev
+
+WORKDIR /ws
+
+# --- UR5e + MoveIt Task Constructor ---
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ros-jazzy-ur-description ros-jazzy-ur-controllers \
+    ros-jazzy-ur-simulation-gz ros-jazzy-ur-moveit-config \
+    ros-jazzy-moveit-task-constructor-core \
+    ros-jazzy-moveit-task-constructor-capabilities \
+    ros-jazzy-robotiq-description \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY docker/entrypoint.sh /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]
+
+# --- full UR metapackage (ur_robot_driver etc. are imported by the sim launch files) ---
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ros-jazzy-ur \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- align all ROS packages to one release (fixes controller_manager / diagnostic_updater ABI mismatch) ---
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends --only-upgrade \
+    $(dpkg-query -W -f='${binary:Package}\n' 'ros-jazzy-*') \
+ && rm -rf /var/lib/apt/lists/*
