@@ -1,5 +1,6 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
@@ -8,17 +9,27 @@ from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
     ur_type = LaunchConfiguration("ur_type")
-    world = PathJoinSubstitution([FindPackageShare("gesture_arm_sim"), "worlds", "pick_place.sdf"])
+    pkg = FindPackageShare("gesture_arm_sim")
+    world = PathJoinSubstitution([pkg, "worlds", "pick_place.sdf"])
+    description = PathJoinSubstitution([pkg, "urdf", "ur_gripper.urdf.xacro"])
+    controllers = PathJoinSubstitution([pkg, "config", "controllers.yaml"])
 
     control = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(PathJoinSubstitution(
             [FindPackageShare("ur_simulation_gz"), "launch", "ur_sim_control.launch.py"])),
-        launch_arguments={"ur_type": ur_type, "world_file": world, "launch_rviz": "false"}.items())
+        launch_arguments={"ur_type": ur_type, "world_file": world, "launch_rviz": "false",
+                          "description_file": description, "controllers_file": controllers}.items())
 
     moveit = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(PathJoinSubstitution(
             [FindPackageShare("ur_moveit_config"), "launch", "ur_moveit.launch.py"])),
-        launch_arguments={"ur_type": ur_type, "use_sim_time": "true", "launch_rviz": "true"}.items())
+        launch_arguments={"ur_type": ur_type, "use_sim_time": "true", "launch_rviz": "true"}.items(),
+        condition=IfCondition(LaunchConfiguration("moveit")))
+
+    gripper_spawner = Node(
+        package="controller_manager", executable="spawner",
+        arguments=["gripper_controller", "-c", "/controller_manager", "--controller-manager-timeout", "120"],
+        parameters=[{"use_sim_time": True}])
 
     cam_bridge = Node(
         package="ros_gz_bridge", executable="parameter_bridge", output="screen",
@@ -27,7 +38,6 @@ def generate_launch_description():
                    "/camera/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo"],
         parameters=[{"use_sim_time": True}])
 
-    # camera pose in the world (must match scripts/make_world.py): x=0.6 y=0 z=1.0, pitched 90 deg down
     cam_tf = Node(
         package="tf2_ros", executable="static_transform_publisher",
         arguments=["--x", "0.6", "--y", "0", "--z", "1.0",
@@ -37,4 +47,5 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument("ur_type", default_value="ur5e"),
-        control, moveit, cam_bridge, cam_tf])
+        DeclareLaunchArgument("moveit", default_value="true"),
+        control, moveit, gripper_spawner, cam_bridge, cam_tf])
