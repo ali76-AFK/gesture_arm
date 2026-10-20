@@ -7,3 +7,6 @@ models/*.task
 __pycache__/
 camera_*.png
 cam_test.jpg
+gesture_probe*.png
+detect_debug.png
+data/
