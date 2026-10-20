@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """pick_place: hard-coded objects -> top-down pick, carry, drop into the bin."""
-import threading, time
+import json, threading, time
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
@@ -33,6 +33,9 @@ OBJECTS = {
     "yellow_block":  (0.70, -0.12, 0.241, 0.022),
 }
 BIN = (0.55, -0.33)
+BIN_HALF = 0.08                    # half width of the bin footprint (m)
+TABLE_TOP = 0.20
+HOME = [0.0, -1.5708, 0.0, -1.5708, 0.0, 0.0]    # look pose: arm straight up, camera sees the whole table
 APPROACH, LIFT, TRANSIT_Z, DROP_Z = 0.12, 0.15, 0.40, 0.27   # heights of the fingertip frame (m)
 
 
@@ -52,6 +55,8 @@ class PickPlace(Node):
         self.state_pub = self.create_publisher(String, "/pick_place_state", 10)
         self.create_subscription(String, "/pick_place_command", self.on_cmd, 10, callback_group=cb)
         self.create_subscription(String, "/arm_command", self.on_arm_cmd, 10, callback_group=cb)
+        self.create_subscription(String, "/detections", self.on_det, 10, callback_group=cb)
+        self.det = {}
         self.abort, self.busy, self.cur = threading.Event(), False, None
         self.get_logger().info("pick_place ready. Objects: " + ", ".join(OBJECTS))
 
@@ -147,10 +152,36 @@ class PickPlace(Node):
             raise RuntimeError(f"gripper failed (error_code={r.error_code})")
         time.sleep(0.5)
 
+    # ---------- vision ----------
+    def on_det(self, msg):
+        try:
+            self.det = json.loads(msg.data)
+        except ValueError:
+            pass
+
+    def look(self, name):
+        self.move_joints(HOME, "look pose")
+        time.sleep(1.5)                      # let the arm settle so the camera sees the whole table
+        t0 = time.time()
+        while time.time() - t0 < 10.0:
+            if self.abort.is_set():
+                raise Abort()
+            if self.det.get("t", 0.0) > t0 and name in self.det.get("objs", {}):
+                return self.det["objs"][name]
+            time.sleep(0.1)
+        raise RuntimeError(f"{name} not seen by the camera")
+
     # ---------- sequence ----------
     def sequence(self, name):
-        x, y, z, close = OBJECTS[name]
         bx, by = BIN
+        self.say(f"running:{name}: looking")
+        o = self.look(name)
+        x, y, top, width = o["x"], o["y"], o["top_z"], o["wx"]
+        if abs(x - bx) < BIN_HALF and abs(y - by) < BIN_HALF:
+            raise RuntimeError(f"{name} is already in the bin")
+        z = max(TABLE_TOP + 0.026, top - 0.04)                         # grasp height (fingertip frame)
+        close = min(0.035, max(0.005, (0.075 - width) / 2 + 0.004))    # finger travel for the measured width
+        self.say(f"running:{name}: seen at x={x:.3f} y={y:.3f} top={top:.3f} width={width * 100:.1f}cm")
         self.say(f"running:{name}: to ready, open gripper")
         self.move_joints(READY)
         self.gripper(0.0)
@@ -171,7 +202,7 @@ class PickPlace(Node):
         self.say(f"running:{name}: release")
         self.gripper(0.0)
         self.line_to(bx, by, TRANSIT_Z, "rise from bin")
-        self.move_joints(READY)
+        self.move_joints(HOME, "home")
 
     def worker(self, name):
         self.abort.clear()
