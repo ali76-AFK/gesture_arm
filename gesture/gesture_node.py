@@ -35,7 +35,20 @@ def main():
     ap.add_argument("--duration", type=float, default=0)
     ap.add_argument("--guide", action="store_true")
     ap.add_argument("--no-preview", action="store_true")
+    ap.add_argument("--ros", default="", help="rosbridge host:port, e.g. localhost:9090")
     a = ap.parse_args()
+    import json
+    pub = None
+    if a.ros:
+        import roslibpy
+        host, port = a.ros.split(":")
+        client = roslibpy.Ros(host=host, port=int(port))
+        try:
+            client.run(timeout=10)
+            pub = roslibpy.Topic(client, "/gesture", "std_msgs/String"); pub.advertise()
+            print("rosbridge connected, publishing /gesture", flush=True)
+        except Exception as ex:
+            print("rosbridge connection FAILED, continuing without ROS:", ex, flush=True)
     z = np.load(a.models, allow_pickle=False)
     M = {"Left": Softmax(z["left_coef"], z["left_intercept"], z["left_classes"]),
          "Right": Softmax(z["right_coef"], z["right_intercept"], z["right_classes"])}
@@ -94,6 +107,11 @@ def main():
                 events.append((el, side, c[0], c[1], step))
                 last_event = f"{side} {c[0]}"
                 print(f"  EVENT +{el:5.1f}s  {side:5s} {c[0]:14s} conf={c[1]:.2f}", flush=True)
+                if pub is not None:
+                    try:
+                        pub.publish(roslibpy.Message({"data": json.dumps({"t": time.time(), "side": side, "gesture": c[0], "conf": round(float(c[1]), 3)})}))
+                    except Exception as ex:
+                        print("publish failed:", ex, flush=True)
         ms.append((time.time() - tp) * 1000); nframes += 1
         if el - last_status >= 3 and not a.guide:
             last_status = el
@@ -116,6 +134,8 @@ def main():
             except cv2.error as e:
                 print("preview disabled:", e); preview = False
     cap.release(); cv2.destroyAllWindows()
+    if pub is not None:
+        client.terminate()
     try: rec.close()
     except Exception: pass
     el = time.time() - t0

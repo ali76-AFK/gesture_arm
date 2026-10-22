@@ -17,7 +17,8 @@ One machine only: Ubuntu 24.04, Docker 29.9.1 with Compose v5, Intel Arc integra
 | `object_detector`: colour segmentation, 3D position from depth | working in simulation (errors of 2 mm or less in the test) |
 | `pick_place`: picks by detected position, drops in the bin | working, stop tested |
 | Gesture recognition: per-hand classifiers on MediaPipe landmarks (`gesture/`) | works in a live printed test, one person, one session |
-| Gesture-to-command interpreter, dashboard | not started |
+| Gesture-to-command interpreter (`gesture_interpreter.py`) | works in a dry run; arm movement by gesture not tested yet |
+| Dashboard | not started |
 | Learned object detector (YOLO) | not started. Pretrained COCO YOLO did not detect the objects |
 | rosbridge/roslibpy test (`scripts/probe_bridge.py`) | passes in both directions |
 
@@ -105,3 +106,15 @@ chown -R --reference=/ws/scripts /ws/data'
 `gesture/train_gestures.py` maps sessions to hands in `DEFAULT_SIDE` (s1 and s2 right hand, s3 left hand). Pass `--side s4=Left` for new sessions.
 
 Measured limits: one person, one camera, one room, three recording sessions. Relaxed hands sometimes fire a false fist or stop. Left-hand accuracy was tested only through mirrored right-hand data plus one left-hand session.
+
+### Gestures to the arm
+
+Needs the simulation, `arm_control` and rosbridge running (see Run). Dry run first: it logs what would be sent and sends nothing.
+
+~~~bash
+./scripts/run.sh exec 'ros2 launch rosbridge_server rosbridge_websocket_launch.xml'
+./scripts/run.sh exec 'ros2 run gesture_arm_sim gesture_interpreter.py --ros-args -p dry_run:=true'
+./scripts/gesture.sh live --ros localhost:9090
+~~~
+
+Rules: stop works from either hand at any time. Other commands are ignored while the arm moves or a pick runs. Repeats within 1.5 s are ignored. Thumbs up runs a pick only if an object was selected in the last 30 s (set it with `/selected_object` until the dashboard exists).
