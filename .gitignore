@@ -11,3 +11,4 @@ gesture_probe*.png
 detect_debug.png
 data/
 data/
+models/*.npz

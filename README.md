@@ -16,10 +16,10 @@ One machine only: Ubuntu 24.04, Docker 29.9.1 with Compose v5, Intel Arc integra
 | `arm_control`: named poses, open/close, stop, collision scene | working |
 | `object_detector`: colour segmentation, 3D position from depth | working in simulation (errors of 2 mm or less in the test) |
 | `pick_place`: picks by detected position, drops in the bin | working, stop tested |
-| Gesture recognition (MediaPipe) | probed only, not built |
+| Gesture recognition: per-hand classifiers on MediaPipe landmarks (`gesture/`) | works in a live printed test, one person, one session |
 | Gesture-to-command interpreter, dashboard | not started |
 | Learned object detector (YOLO) | not started. Pretrained COCO YOLO did not detect the objects |
-| rosbridge/roslibpy test (`scripts/probe_bridge.py`) | failed, cause unknown |
+| rosbridge/roslibpy test (`scripts/probe_bridge.py`) | passes in both directions |
 
 ## Setup
 
@@ -63,9 +63,45 @@ apt-get update -qq && apt-get install -y -qq python3-venv >/dev/null 2>&1
 python3 -m venv /tmp/v && . /tmp/v/bin/activate
 pip -q install mediapipe 2>&1 | tail -n 1
 python -u /ws/scripts/probe_gesture2.py
-chown --reference=/ws/scripts /ws/gesture_probe.png'
+chown --reference=/ws/scripts /ws/gesture_probe_retest.png'
 ~~~
 
 3. Hold each pose when prompted. Read the pose description in the prompt exactly, since a wrong pose gives misleading results. It prints which gesture labels came back and finger measurements for each pose.
-4. It saves `gesture_probe.png` (a contact sheet of what the camera saw). It contains your face and stays on your machine: it is listed in `.gitignore`. Check `git status` before every commit.
+4. It saves `gesture_probe_retest.png` (a contact sheet of what the camera saw). It contains your face and stays on your machine: it is listed in `.gitignore`. Check `git status` before every commit.
 5. If you record more data later, keep it in `data/`, which is also ignored.
+
+## Gesture control
+
+Gestures are recognised from the 21 MediaPipe hand landmarks by one small logistic-regression model per hand. Left-hand models are trained on mirrored right-hand data plus your own left-hand session. The pretrained MediaPipe fist label never fired for the author, which is why the models exist.
+
+| Hand | Gesture | Command |
+|---|---|---|
+| Right | pointing up | move cursor, select object (not wired yet) |
+| Right | pinch | click in the dashboard (not wired yet) |
+| Left | fist | close gripper |
+| Left | three fingers | open gripper |
+| Left | thumbs up | confirm and run the selected pick |
+| Left | thumbs down | cancel |
+| Left | victory | home pose |
+| Either | open palm | stop |
+
+A gesture fires only after the same label is held for 6 frames at confidence 0.8 or higher (about 0.3 s at 21 fps).
+
+Record your own data (numbers only, no images are stored), then train and try it. `SESSION` names the recording and `HAND` keeps only frames labelled with that hand:
+
+~~~bash
+docker compose -f docker-compose.yml -f docker-compose.cam.yml run --rm --user root sim bash -c '
+apt-get update -qq && apt-get install -y -qq python3-venv >/dev/null 2>&1
+python3 -m venv /tmp/v && . /tmp/v/bin/activate
+pip -q install mediapipe 2>&1 | tail -n 1
+SESSION=s1 HAND=Right python -u /ws/scripts/record_landmarks.py
+chown -R --reference=/ws/scripts /ws/data'
+./scripts/gesture.sh build
+./scripts/gesture.sh train --check     # held-out evaluation
+./scripts/gesture.sh train             # writes models/gesture_models.npz (not committed)
+./scripts/gesture.sh live --guide      # guided live test, prints which gestures fired
+~~~
+
+`gesture/train_gestures.py` maps sessions to hands in `DEFAULT_SIDE` (s1 and s2 right hand, s3 left hand). Pass `--side s4=Left` for new sessions.
+
+Measured limits: one person, one camera, one room, three recording sessions. Relaxed hands sometimes fire a false fist or stop. Left-hand accuracy was tested only through mirrored right-hand data plus one left-hand session.

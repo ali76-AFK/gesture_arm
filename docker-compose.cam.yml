@@ -2,3 +2,6 @@ services:
   sim:
     devices:
       - /dev/video0:/dev/video0
+  gesture:
+    devices:
+      - /dev/video0:/dev/video0

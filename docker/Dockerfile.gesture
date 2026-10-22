@@ -1,0 +1,10 @@
+# Gesture perception image. Built on the sim image so the environment is the one already tested;
+# MediaPipe lives in its own venv, separate from the ROS Python packages.
+ARG BASE=gesture-arm/sim:dev
+FROM ${BASE}
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+RUN python3 -m venv /opt/gesture-venv \
+ && /opt/gesture-venv/bin/pip install --no-cache-dir mediapipe scikit-learn pandas roslibpy
+ENV PATH=/opt/gesture-venv/bin:$PATH

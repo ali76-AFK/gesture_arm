@@ -26,3 +26,25 @@ services:
       - "${VIDEO_GID}"
       - "${RENDER_GID}"
     command: bash
+
+  gesture:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.gesture
+    image: gesture-arm/gesture:dev
+    network_mode: host
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    working_dir: /ws
+    entrypoint: []
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+      - XAUTHORITY=${XAUTH_FILE}
+      - QT_QPA_PLATFORM=xcb
+      - HOME=/tmp
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${XAUTH_FILE}:${XAUTH_FILE}:ro
+      - ./:/ws
+    group_add:
+      - "${VIDEO_GID}"
+    command: bash
