@@ -21,6 +21,15 @@ TESTS = [
     ("three_fingers", "index, middle and ring fingers up"),
     ("no_hand",       "take your hand completely out of the camera view"),
 ]
+import os
+HINTS = {
+ "pointing_up":   "hand at chest height, wrist visible: ONLY the index finger straight up, other fingers curled, thumb tucked",
+ "victory":       "palm toward the camera: index and middle fingers straight up and spread in a V, ring and pinky curled, thumb holding them down",
+ "pinch":         "thumb tip touching index fingertip, the other three fingers CURLED into the palm (not an OK sign)",
+ "three_fingers": "palm toward the camera: index, middle and ring fingers straight up, thumb folded across the palm, pinky curled",
+}
+if os.environ.get("POSES"):
+    TESTS = [(n, HINTS.get(n, h)) for n, h in TESTS if n in os.environ["POSES"].split(",")]
 CHAINS = [[0,1,2,3,4],[0,5,6,7,8],[0,9,10,11,12],[0,13,14,15,16],[0,17,18,19,20],[5,9,13,17]]
 
 cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
@@ -88,5 +97,5 @@ try: rec.close()
 except Exception as e: print("close:", e)
 while len(tiles) % 3: tiles.append(np.zeros((240, 320, 3), np.uint8))
 sheet = np.vstack([np.hstack(tiles[i:i + 3]) for i in range(0, len(tiles), 3)])
-cv2.imwrite("/ws/gesture_probe.png", sheet)
-print("\nsaved /ws/gesture_probe.png")
+cv2.imwrite("/ws/gesture_probe_retest.png", sheet)
+print("\nsaved /ws/gesture_probe_retest.png")
