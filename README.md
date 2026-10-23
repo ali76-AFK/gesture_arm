@@ -17,7 +17,7 @@ One machine only: Ubuntu 24.04, Docker 29.9.1 with Compose v5, Intel Arc integra
 | `object_detector`: colour segmentation, 3D position from depth | working in simulation (errors of 2 mm or less in the test) |
 | `pick_place`: picks by detected position, drops in the bin | working, stop tested |
 | Gesture recognition: per-hand classifiers on MediaPipe landmarks (`gesture/`) | works in a live printed test, one person, one session |
-| Gesture-to-command interpreter (`gesture_interpreter.py`) | gestures drive open, close, home and stop on the simulated arm; stop mid-move, busy and stale-event rules tested with injected events (`scripts/gesture_chain_test.py`); a full gesture-driven pick is not tested yet |
+| Gesture-to-command interpreter (`gesture_interpreter.py`) | gestures drive open, close, home and stop on the simulated arm; stop mid-move, busy and stale-event rules tested with injected events (`scripts/gesture_chain_test.py`); a gesture-started pick (object selected by topic, then left thumbs up) and a gesture stop during a pick were each run once live |
 | Dashboard | not started |
 | Learned object detector (YOLO) | not started. Pretrained COCO YOLO did not detect the objects |
 | rosbridge/roslibpy test (`scripts/probe_bridge.py`) | passes in both directions |
@@ -118,3 +118,9 @@ Needs the simulation, `arm_control` and rosbridge running (see Run). Dry run fir
 ~~~
 
 Rules: stop works from either hand at any time. Other commands are ignored while the arm moves or a pick runs. Repeats within 1.5 s are ignored. Thumbs up runs a pick only if an object was selected in the last 30 s (set it with `/selected_object` until the dashboard exists).
+
+### Known limits (measured)
+
+- Aborting a pick leaves the object in the gripper. Opening the gripper afterwards drops it from the carry height.
+- With the simulation, detector, `pick_place`, rosbridge, interpreter and the gesture node with preview all running, the gesture node processed about 12 to 14 frames per second (about 21 with fewer processes), so a 6-frame hold takes about 0.5 s.
+- Object selection still needs `/selected_object`. The right-hand gestures are not wired yet.
