@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """gesture_node: webcam -> MediaPipe landmarks -> per-hand classifier -> hold filter -> gesture events (printed)."""
-import argparse, sys, time, urllib.request
+import argparse, base64, json, sys, time, urllib.request
 from pathlib import Path
 import numpy as np, cv2
 import mediapipe as mp
@@ -38,7 +38,7 @@ def main():
     ap.add_argument("--ros", default="", help="rosbridge host:port, e.g. localhost:9090")
     a = ap.parse_args()
     import json
-    pub = None
+    pub = img_pub = hs_pub = None
     if a.ros:
         import roslibpy
         host, port = a.ros.split(":")
@@ -47,8 +47,20 @@ def main():
             client.run(timeout=10)
             pub = roslibpy.Topic(client, "/gesture", "std_msgs/String"); pub.advertise()
             print("rosbridge connected, publishing /gesture", flush=True)
+            img_pub = roslibpy.Topic(client, "/dashboard/webcam/compressed", "sensor_msgs/CompressedImage"); img_pub.advertise()
+            hs_pub = roslibpy.Topic(client, "/hand_state", "std_msgs/String"); hs_pub.advertise()
         except Exception as ex:
             print("rosbridge connection FAILED, continuing without ROS:", ex, flush=True)
+    err = {"n": 0}
+    def send(topic, payload):
+        if topic is None:
+            return
+        try:
+            topic.publish(roslibpy.Message(payload))
+        except Exception as ex:
+            err["n"] += 1
+            if err["n"] == 1:
+                print("publish failed:", ex, flush=True)
     z = np.load(a.models, allow_pickle=False)
     M = {"Left": Softmax(z["left_coef"], z["left_intercept"], z["left_classes"]),
          "Right": Softmax(z["right_coef"], z["right_intercept"], z["right_classes"])}
@@ -67,6 +79,7 @@ def main():
     run = {"Left": (None, 0), "Right": (None, 0)}
     events, ms, nframes, last_step, last_status = [], [], 0, -1, 0.0
     last_event, pointer = "", None
+    last_img = 0.0
     t0 = time.time()
     while True:
         el = time.time() - t0
@@ -96,6 +109,21 @@ def main():
             shown[side] = (label, conf, pre.category_name if pre else "-", lm)
             if side == "Right" and label == "pointing_up" and conf >= a.thr:
                 pointer = (lm[8].x, lm[8].y)
+        if hs_pub is not None and shown:
+            send(hs_pub, {"data": json.dumps({"t": time.time(), "hands": {
+                sd: {"label": v[0], "conf": round(float(v[1]), 3), "x": round(float(v[3][8].x), 4), "y": round(float(v[3][8].y), 4)}
+                for sd, v in shown.items()}})})
+        if img_pub is not None and time.time() - last_img >= 0.1:
+            last_img = time.time()
+            dimg = bgr.copy()
+            for sd, v in shown.items():
+                for ch in CHAINS:
+                    cv2.polylines(dimg, [np.array([[v[3][j].x * W, v[3][j].y * H] for j in ch], np.int32)], False, (0, 255, 0), 2)
+            okj, buf = cv2.imencode(".jpg", dimg, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            if okj:
+                tnow = time.time()
+                send(img_pub, {"header": {"stamp": {"sec": int(tnow), "nanosec": int((tnow % 1) * 1e9)}, "frame_id": "webcam"},
+                               "format": "jpeg", "data": base64.b64encode(buf.tobytes()).decode()})
         for side in ("Left", "Right"):
             c = cand.get(side)
             if c is None:

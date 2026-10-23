@@ -18,7 +18,7 @@ One machine only: Ubuntu 24.04, Docker 29.9.1 with Compose v5, Intel Arc integra
 | `pick_place`: picks by detected position, drops in the bin | working, stop tested |
 | Gesture recognition: per-hand classifiers on MediaPipe landmarks (`gesture/`) | works in a live printed test, one person, one session |
 | Gesture-to-command interpreter (`gesture_interpreter.py`) | gestures drive open, close, home and stop on the simulated arm; stop mid-move, busy and stale-event rules tested with injected events (`scripts/gesture_chain_test.py`); a gesture-started pick (object selected by topic, then left thumbs up) and a gesture stop during a pick were each run once live |
-| Dashboard | not started |
+| Dashboard (`dashboard/index.html`) | works live, one person, one session: mouse and right-hand control both selected and confirmed picks, STOP and abort worked. Pinch clicks are unreliable (see Known limits) |
 | Learned object detector (YOLO) | not started. Pretrained COCO YOLO did not detect the objects |
 | rosbridge/roslibpy test (`scripts/probe_bridge.py`) | passes in both directions |
 
@@ -77,8 +77,8 @@ Gestures are recognised from the 21 MediaPipe hand landmarks by one small logist
 
 | Hand | Gesture | Command |
 |---|---|---|
-| Right | pointing up | move cursor, select object (not wired yet) |
-| Right | pinch | click in the dashboard (not wired yet) |
+| Right | pointing up | move the dashboard cursor |
+| Right | pinch | click in the dashboard (select an object, Home, Open, Close, STOP) |
 | Left | fist | close gripper |
 | Left | three fingers | open gripper |
 | Left | thumbs up | confirm and run the selected pick |
@@ -123,4 +123,25 @@ Rules: stop works from either hand at any time. Other commands are ignored while
 
 - Aborting a pick leaves the object in the gripper. Opening the gripper afterwards drops it from the carry height.
 - With the simulation, detector, `pick_place`, rosbridge, interpreter and the gesture node with preview all running, the gesture node processed about 12 to 14 frames per second (about 21 with fewer processes), so a 6-frame hold takes about 0.5 s.
-- Object selection still needs `/selected_object`. The right-hand gestures are not wired yet.
+- In one live dashboard session, 19 of 32 right-hand pinch events were ignored because no pointing position had been seen in the previous 1.5 s, and 7 selected an object. The cause is not confirmed yet.
+- rosbridge listens on all network interfaces (port 9090) with its default launch file. Anyone who can reach the machine could read the camera feed and publish robot commands. Use a trusted network or a firewall.
+- The dashboard webcam feed runs at about 7 to 8 Hz and the robot camera at about 5 Hz.
+
+## Dashboard
+
+Eight processes, one terminal each. Check `docker ps` is clean first.
+
+~~~bash
+./scripts/run.sh sim
+./scripts/run.sh exec 'ros2 run gesture_arm_sim arm_control.py --ros-args -p use_sim_time:=true'
+./scripts/run.sh exec 'ros2 run gesture_arm_sim object_detector.py --ros-args -p use_sim_time:=true'
+./scripts/run.sh exec 'ros2 run gesture_arm_sim pick_place.py --ros-args -p use_sim_time:=true'
+./scripts/run.sh exec 'ros2 launch rosbridge_server rosbridge_websocket_launch.xml'
+./scripts/run.sh exec 'ros2 run gesture_arm_sim gesture_interpreter.py'
+(cd dashboard && python3 -m http.server 8080 --bind 127.0.0.1)
+./scripts/gesture.sh live --ros localhost:9090 --no-preview
+~~~
+
+Open http://localhost:8080/index.html. Click an object card or the robot camera image to select it, then confirm with a left thumbs up or the Confirm button. Tick "hand control" to use the right hand: pointing moves the cursor and a pinch clicks. Esc turns hand control off. Confirm pick cannot be clicked by hand.
+
+`dashboard/vendor/roslib.min.js` is roslib 1.4.1 (BSD-2-Clause, licence in `dashboard/vendor/roslib-LICENSE.txt`).

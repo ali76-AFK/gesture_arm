@@ -3,7 +3,7 @@
 import json, time
 import numpy as np, cv2, rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import Image, CameraInfo
+from sensor_msgs.msg import Image, CameraInfo, CompressedImage
 from std_msgs.msg import String
 
 CAM = (0.6, 0.0, 1.0)     # camera position in base_link; looks straight down (matches make_world.py)
@@ -56,7 +56,7 @@ class Detector(Node):
         self.create_subscription(Image, "/camera/depth_image", self.on_depth, 1)
         self.create_subscription(CameraInfo, "/camera/camera_info", self.on_info, 1)
         self.pub = self.create_publisher(String, "/detections", 10)
-        self.img_pub = self.create_publisher(Image, "/detections/image", 1)
+        self.img_pub = self.create_publisher(CompressedImage, "/detections/image/compressed", 1)
         self.create_timer(0.2, self.tick)
         self.get_logger().info("object_detector running (colour segmentation) -> /detections")
 
@@ -80,8 +80,14 @@ class Detector(Node):
                 u, v = int(f["px"][0]), int(f["px"][1])
                 cv2.circle(img, (u, v), 5, (255, 255, 255), 2)
                 cv2.putText(img, name, (u + 8, v), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            self.img_pub.publish(Image(height=img.shape[0], width=img.shape[1], encoding="bgr8",
-                                       step=img.shape[1] * 3, data=img.tobytes()))
+            ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            if ok:
+                m = CompressedImage()
+                m.format = "jpeg"
+                m.data = buf.tobytes()
+                m.header.stamp = self.get_clock().now().to_msg()
+                m.header.frame_id = "camera_link"
+                self.img_pub.publish(m)
 
 
 def main():

@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gesture-arm dashboard</title>
+<style>
+  :root { color-scheme: dark; --bg:#111418; --panel:#1b2027; --line:#2e3641; --text:#e8ecf1; --dim:#8d99a8; --ok:#4cc38a; --bad:#ef5350; --accent:#4aa3ff; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px system-ui, sans-serif; }
+  header { display:flex; flex-wrap:wrap; gap:14px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:16px; margin:0 8px 0 0; }
+  .badge { padding:2px 8px; border-radius:10px; background:var(--panel); border:1px solid var(--line); color:var(--dim); }
+  .badge.ok { color:var(--ok); border-color:var(--ok); }
+  .badge.bad { color:var(--bad); border-color:var(--bad); }
+  main { display:grid; grid-template-columns:1fr 1fr 340px; gap:12px; padding:12px 16px; align-items:start; }
+  @media (max-width:1300px) { main { grid-template-columns:1fr; } }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px; margin-bottom:12px; }
+  .panel h2 { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); margin:0 0 8px; }
+  .vid { aspect-ratio:4/3; background:#000; border-radius:6px; overflow:hidden; }
+  .vid img { width:100%; height:100%; display:block; object-fit:contain; }
+  #cam { transform:scaleX(-1); }
+  .cap { margin-top:6px; color:var(--dim); font-size:13px; min-height:1.3em; }
+  button { font:inherit; color:var(--text); background:#242b34; border:1px solid var(--line); border-radius:6px; padding:8px 12px; cursor:pointer; }
+  button:hover, .hover { border-color:var(--accent); outline:2px solid var(--accent); }
+  button.stop { background:#6e1f1f; border-color:var(--bad); font-weight:700; width:100%; padding:14px; margin-top:8px; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; }
+  .kv { display:flex; justify-content:space-between; padding:2px 0; }
+  .kv span:first-child { color:var(--dim); }
+  .obj { display:block; width:100%; text-align:left; margin-bottom:6px; }
+  .obj.sel { border-color:var(--ok); background:#1d3a2c; }
+  .obj.stale { opacity:.45; }
+  #log, #gl { font:12px ui-monospace, monospace; max-height:170px; overflow:auto; white-space:pre-wrap; color:var(--dim); }
+  #cursor { position:fixed; width:22px; height:22px; margin:-11px 0 0 -11px; border-radius:50%; border:3px solid var(--accent); background:rgba(74,163,255,.25); pointer-events:none; display:none; z-index:50; }
+  #cursor.pinch { border-color:var(--ok); background:rgba(76,195,138,.5); }
+</style>
+</head>
+<body>
+<header>
+  <h1>gesture-arm</h1>
+  <span id="conn" class="badge bad">connecting...</span>
+  <span id="fps" class="badge">feeds: -</span>
+  <label class="badge"><input type="checkbox" id="hand"> hand control (right hand: point = cursor, pinch = click)</label>
+  <span class="badge">Esc turns hand control off</span>
+</header>
+<main>
+  <section>
+    <div class="panel"><h2>Your hand (mirrored view)</h2>
+      <div class="vid"><img id="cam" alt="waiting for the webcam feed"></div>
+      <div class="cap" id="handtxt">no hand</div></div>
+    <div class="panel"><h2>Gesture events</h2><div id="gl"></div></div>
+  </section>
+  <section>
+    <div class="panel"><h2>Robot camera</h2>
+      <div class="vid"><img id="rcam" class="clickable" alt="waiting for the detector feed"></div>
+      <div class="cap">Click near an object to select it. Pick it with a left thumbs up or the Confirm button.</div></div>
+    <div class="panel"><h2>Log</h2><div id="log"></div></div>
+  </section>
+  <section>
+    <div class="panel"><h2>Robot</h2>
+      <div class="kv"><span>arm</span><b id="arm">-</b></div>
+      <div class="kv"><span>pick</span><b id="pick">-</b></div></div>
+    <div class="panel"><h2>Selection</h2>
+      <div class="kv"><span>selected</span><b id="sel">none</b></div>
+      <div class="kv"><span>expires in</span><b id="ttl">-</b></div>
+      <div id="objs" style="margin-top:6px"></div>
+      <button id="confirm" style="width:100%">Confirm pick (same as left thumbs up)</button></div>
+    <div class="panel"><h2>Commands</h2>
+      <div class="row">
+        <button class="clickable" data-cmd="home">Home</button>
+        <button class="clickable" data-cmd="open">Open gripper</button>
+        <button class="clickable" data-cmd="close">Close gripper</button></div>
+      <button class="clickable stop" data-cmd="stop">STOP</button></div>
+  </section>
+</main>
+<div id="cursor"></div>
+<script src="vendor/roslib.min.js"></script>
+<script>
+const CFG = {
+  url: "ws://localhost:9090",
+  xMin: 0.15, xMax: 0.85, yMin: 0.10, yMax: 0.75,   // part of the webcam view that covers the whole page (starting guess)
+  smooth: 0.5, cursorMaxAgeMs: 600, pointerMaxAgeMs: 1500,
+  selectTtlS: 30, pickStaleMs: 60000, pickRadiusPx: 45, detStaleMs: 3000
+};
+const $ = id => document.getElementById(id);
+const clamp = v => Math.max(0, Math.min(1, v));
+function log(s) { const el = $("log"); el.textContent = new Date().toLocaleTimeString() + "  " + s + "\n" + el.textContent.split("\n").slice(0, 40).join("\n"); }
+
+const ros = new ROSLIB.Ros({url: CFG.url});
+const conn = $("conn");
+ros.on("connection", () => { conn.textContent = "connected"; conn.className = "badge ok"; log("connected to rosbridge"); });
+ros.on("error", () => { conn.textContent = "connection error"; conn.className = "badge bad"; });
+ros.on("close", () => { conn.textContent = "disconnected"; conn.className = "badge bad"; });
+const topic = (name, type, opts = {}) => new ROSLIB.Topic(Object.assign({ros, name, messageType: type}, opts));
+const pubArm = topic("/arm_command", "std_msgs/String");
+const pubPick = topic("/pick_place_command", "std_msgs/String");
+const pubSel = topic("/selected_object", "std_msgs/String");
+const send = (t, text) => t.publish(new ROSLIB.Message({data: text}));
+
+const S = {arm: "", pick: "", pickT: 0, sel: null, selT: 0, det: {}, detT: 0, handT: 0, curSm: null, pointer: null, pinchActive: false};
+const cnt = {cam: [], rcam: []};
+const armMoving = () => S.arm.startsWith("moving:");
+const pickRunning = () => S.pick.startsWith("running:") && Date.now() - S.pickT < CFG.pickStaleMs;
+
+function command(c) {
+  if (c !== "stop" && (armMoving() || pickRunning())) { log("ignored " + c + ": robot busy (" + (armMoving() ? S.arm : S.pick) + ")"); return; }
+  send(pubArm, c); log("sent /arm_command " + c);
+}
+document.querySelectorAll("[data-cmd]").forEach(b => b.addEventListener("click", () => command(b.dataset.cmd)));
+
+function select(name) { S.sel = name; S.selT = Date.now(); send(pubSel, name); log("selected " + name); renderSel(); }
+$("confirm").addEventListener("click", () => {
+  if (!S.sel || Date.now() - S.selT > CFG.selectTtlS * 1000) { log("confirm ignored: nothing selected in the last " + CFG.selectTtlS + " s"); return; }
+  if (armMoving() || pickRunning()) { log("confirm ignored: robot busy"); return; }
+  send(pubPick, S.sel); log("sent /pick_place_command " + S.sel);
+  send(pubSel, ""); S.sel = null; renderSel();
+});
+
+topic("/arm_state", "std_msgs/String").subscribe(m => { S.arm = m.data; $("arm").textContent = m.data; });
+topic("/pick_place_state", "std_msgs/String").subscribe(m => { S.pick = m.data; S.pickT = Date.now(); $("pick").textContent = m.data; });
+topic("/selected_object", "std_msgs/String").subscribe(m => { S.sel = m.data.trim() || null; S.selT = Date.now(); renderSel(); });
+
+topic("/gesture", "std_msgs/String").subscribe(m => {
+  let e; try { e = JSON.parse(m.data); } catch (x) { return; }
+  const g = $("gl");
+  g.textContent = new Date().toLocaleTimeString() + "  " + e.side + " " + e.gesture + " (" + e.conf + ")\n" + g.textContent.split("\n").slice(0, 14).join("\n");
+  if (e.side === "Right" && e.gesture === "pinch") handClick();
+});
+
+let hovered = null;
+function hoverOff() { if (hovered) hovered.classList.remove("hover"); hovered = null; }
+function hoverUpdate(x, y) {
+  const el = document.elementFromPoint(x, y), t = el && el.closest(".clickable");
+  if (t !== hovered) { hoverOff(); hovered = t; if (t) t.classList.add("hover"); }
+}
+function hideCursor() { $("cursor").style.display = "none"; hoverOff(); S.curSm = null; }
+function moveCursor(R) {
+  const c = $("cursor");
+  if (!$("hand").checked || !R) { hideCursor(); return; }
+  if (R.label === "pointing_up") {
+    const nx = clamp((1 - R.x - CFG.xMin) / (CFG.xMax - CFG.xMin)), ny = clamp((R.y - CFG.yMin) / (CFG.yMax - CFG.yMin));
+    const tx = nx * innerWidth, ty = ny * innerHeight;
+    S.curSm = S.curSm ? {x: S.curSm.x + CFG.smooth * (tx - S.curSm.x), y: S.curSm.y + CFG.smooth * (ty - S.curSm.y)} : {x: tx, y: ty};
+    S.pointer = {x: S.curSm.x, y: S.curSm.y, t: Date.now()};
+    S.pinchActive = false;
+  } else if (R.label === "pinch" && S.pointer && Date.now() - S.pointer.t < CFG.pointerMaxAgeMs) {
+    S.pinchActive = true;                       // keep the cursor where it was before the pinch started
+  } else { hideCursor(); return; }
+  c.style.display = "block"; c.className = S.pinchActive ? "pinch" : "";
+  c.style.left = S.pointer.x + "px"; c.style.top = S.pointer.y + "px";
+  hoverUpdate(S.pointer.x, S.pointer.y);
+}
+function handClick() {
+  if (!$("hand").checked) return;
+  const p = S.pointer;
+  if (!p || Date.now() - p.t > CFG.pointerMaxAgeMs) { log("pinch ignored: no pointing position in the last " + CFG.pointerMaxAgeMs / 1000 + " s"); return; }
+  const el = document.elementFromPoint(p.x, p.y), target = el && el.closest(".clickable");
+  if (!target) { log("pinch at (" + Math.round(p.x) + "," + Math.round(p.y) + "): nothing clickable there"); return; }
+  log("pinch click on " + (target.dataset.cmd || target.dataset.obj || target.id));
+  target.dispatchEvent(new MouseEvent("click", {bubbles: true, clientX: p.x, clientY: p.y}));
+}
+topic("/hand_state", "std_msgs/String", {queue_length: 1}).subscribe(m => {
+  let h; try { h = JSON.parse(m.data); } catch (x) { return; }
+  S.handT = Date.now();
+  const L = h.hands.Left, R = h.hands.Right;
+  $("handtxt").textContent = (L ? "Left: " + L.label + " " + L.conf : "Left: -") + "   |   " + (R ? "Right: " + R.label + " " + R.conf : "Right: -");
+  moveCursor(R);
+});
+$("hand").addEventListener("change", () => { if (!$("hand").checked) hideCursor(); log("hand control " + ($("hand").checked ? "ON" : "off")); });
+document.addEventListener("keydown", e => { if (e.key === "Escape" && $("hand").checked) { $("hand").checked = false; hideCursor(); log("hand control off (Esc)"); } });
+
+const cards = {};
+topic("/detections", "std_msgs/String", {queue_length: 1}).subscribe(m => {
+  let d; try { d = JSON.parse(m.data); } catch (x) { return; }
+  S.det = d.objs || {}; S.detT = Date.now();
+  for (const [name, o] of Object.entries(S.det)) {
+    if (!cards[name]) {
+      const b = document.createElement("button");
+      b.className = "obj clickable"; b.dataset.obj = name;
+      b.addEventListener("click", () => select(name));
+      $("objs").appendChild(b); cards[name] = b;
+    }
+    cards[name].dataset.txt = name + "   x=" + o.x.toFixed(2) + " y=" + o.y.toFixed(2);
+  }
+  renderSel();
+});
+function renderSel() {
+  const fresh = Date.now() - S.detT < CFG.detStaleMs;
+  for (const [name, b] of Object.entries(cards)) {
+    const seen = fresh && S.det[name];
+    b.textContent = seen ? b.dataset.txt : name + "   (not seen)";
+    b.classList.toggle("stale", !seen); b.classList.toggle("sel", S.sel === name);
+  }
+  $("sel").textContent = S.sel || "none";
+}
+$("rcam").addEventListener("click", ev => {
+  const im = $("rcam"), r = im.getBoundingClientRect(), w = im.naturalWidth || 640, h = im.naturalHeight || 480;
+  const u = (ev.clientX - r.left) * w / r.width, v = (ev.clientY - r.top) * h / r.height;
+  let best = null, bd = 1e9;
+  for (const [name, o] of Object.entries(S.det)) { const d = Math.hypot(o.px[0] - u, o.px[1] - v); if (d < bd) { bd = d; best = name; } }
+  if (best && bd <= CFG.pickRadiusPx && Date.now() - S.detT < CFG.detStaleMs) select(best);
+  else log("no object near (" + Math.round(u) + "," + Math.round(v) + ")");
+});
+
+topic("/dashboard/webcam/compressed", "sensor_msgs/CompressedImage", {queue_length: 1}).subscribe(m => { $("cam").src = "data:image/jpeg;base64," + m.data; cnt.cam.push(Date.now()); });
+topic("/detections/image/compressed", "sensor_msgs/CompressedImage", {queue_length: 1}).subscribe(m => { $("rcam").src = "data:image/jpeg;base64," + m.data; cnt.rcam.push(Date.now()); });
+
+setInterval(() => {
+  const n = Date.now();
+  for (const k of Object.keys(cnt)) cnt[k] = cnt[k].filter(t => n - t < 3000);
+  $("fps").textContent = "feeds: webcam " + (cnt.cam.length / 3).toFixed(1) + " Hz, robot camera " + (cnt.rcam.length / 3).toFixed(1) + " Hz";
+  if (S.sel) { const left = CFG.selectTtlS - (n - S.selT) / 1000; $("ttl").textContent = left > 0 ? left.toFixed(0) + " s" : "expired"; } else $("ttl").textContent = "-";
+  if (n - S.handT > CFG.cursorMaxAgeMs) { $("handtxt").textContent = "no hand"; hideCursor(); }
+  renderSel();
+}, 500);
+</script>
+</body>
+</html>
