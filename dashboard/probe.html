@@ -1,0 +1,32 @@
+<!doctype html><meta charset="utf-8"><title>dashboard probe</title>
+<style>body{font-family:sans-serif;background:#111;color:#eee;margin:16px}img{width:640px;height:480px;background:#222;display:block}pre{background:#000;padding:8px;width:640px}</style>
+<h3>rosbridge probe</h3>
+<div id="status">connecting...</div>
+<img id="cam" alt="no frame yet">
+<pre id="stats"></pre>
+<script src="vendor/roslib.min.js"></script>
+<script>
+const ros = new ROSLIB.Ros({url: "ws://localhost:9090"});
+const st = document.getElementById("status");
+ros.on("connection", () => st.textContent = "connected to rosbridge");
+ros.on("error", e => st.textContent = "ERROR: " + e);
+ros.on("close", () => st.textContent = "connection closed");
+let n = 0, arrivals = [], lat = [], bytes = 0, dtype = "-", head = "-", last = {};
+const names = ["/probe_text", "/arm_state", "/pick_place_state", "/gesture"];
+names.forEach(name => new ROSLIB.Topic({ros, name, messageType: "std_msgs/String"}).subscribe(m => last[name] = m.data));
+new ROSLIB.Topic({ros, name: "/probe_webcam", messageType: "sensor_msgs/CompressedImage", queue_length: 1}).subscribe(m => {
+  const now = Date.now() / 1000;
+  n++; arrivals.push(now); bytes = m.data.length; dtype = typeof m.data; head = String(m.data).slice(0, 12);
+  lat.push(now - (m.header.stamp.sec + m.header.stamp.nanosec * 1e-9));
+  document.getElementById("cam").src = "data:image/jpeg;base64," + m.data;
+});
+setInterval(() => {
+  const now = Date.now() / 1000, recent = arrivals.filter(t => now - t < 3), l = lat.slice(-30);
+  const mean = l.length ? 1000 * l.reduce((a, b) => a + b) / l.length : 0;
+  document.getElementById("stats").textContent =
+    `frames received: ${n}\nrate over the last 3 s: ${(recent.length / 3).toFixed(1)} Hz\n` +
+    `latency, last 30 (publisher clock to browser clock): ${mean.toFixed(0)} ms\n` +
+    `last frame: ${(bytes / 1024).toFixed(0)} KB base64 | data type: ${dtype} | starts: ${head}\n\n` +
+    names.map(k => `${k}: ${last[k] ?? "(nothing yet)"}`).join("\n");
+}, 500);
+</script>
