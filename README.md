@@ -17,7 +17,7 @@ One machine only: Ubuntu 24.04, Docker 29.9.1 with Compose v5, Intel Arc integra
 | `object_detector`: colour segmentation, 3D position from depth | working in simulation (errors of 2 mm or less in the test) |
 | `pick_place`: picks by detected position, drops in the bin | working, stop tested |
 | Gesture recognition: per-hand classifiers on MediaPipe landmarks (`gesture/`) | works in a live printed test, one person, one session |
-| Gesture-to-command interpreter (`gesture_interpreter.py`) | works in a dry run; arm movement by gesture not tested yet |
+| Gesture-to-command interpreter (`gesture_interpreter.py`) | gestures drive open, close, home and stop on the simulated arm; stop mid-move, busy and stale-event rules tested with injected events (`scripts/gesture_chain_test.py`); a full gesture-driven pick is not tested yet |
 | Dashboard | not started |
 | Learned object detector (YOLO) | not started. Pretrained COCO YOLO did not detect the objects |
 | rosbridge/roslibpy test (`scripts/probe_bridge.py`) | passes in both directions |
