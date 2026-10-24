@@ -18,7 +18,7 @@ One machine only: Ubuntu 24.04, Docker 29.9.1 with Compose v5, Intel Arc integra
 | `pick_place`: picks by detected position, drops in the bin | working, stop tested |
 | Gesture recognition: per-hand classifiers on MediaPipe landmarks (`gesture/`) | works in a live printed test, one person, one session |
 | Gesture-to-command interpreter (`gesture_interpreter.py`) | gestures drive open, close, home and stop on the simulated arm; stop mid-move, busy and stale-event rules tested with injected events (`scripts/gesture_chain_test.py`); a gesture-started pick (object selected by topic, then left thumbs up) and a gesture stop during a pick were each run once live |
-| Dashboard (`dashboard/index.html`) | works live, one person, one session: mouse and right-hand control both selected and confirmed picks, STOP and abort worked. Pinch clicks are unreliable (see Known limits) |
+| Dashboard (`dashboard/index.html`) | works live, one person, one session: mouse and right-hand control both selected and confirmed picks, STOP and abort worked. The cursor follows the palm centre through a One Euro filter. Objects are selected by a 1 s dwell or a pinch click (see Known limits) |
 | Learned object detector (YOLO) | not started. Pretrained COCO YOLO did not detect the objects |
 | rosbridge/roslibpy test (`scripts/probe_bridge.py`) | passes in both directions |
 
@@ -123,7 +123,9 @@ Rules: stop works from either hand at any time. Other commands are ignored while
 
 - Aborting a pick leaves the object in the gripper. Opening the gripper afterwards drops it from the carry height.
 - With the simulation, detector, `pick_place`, rosbridge, interpreter and the gesture node with preview all running, the gesture node processed about 12 to 14 frames per second (about 21 with fewer processes), so a 6-frame hold takes about 0.5 s.
-- In one live dashboard session, 19 of 32 right-hand pinch events were ignored because no pointing position had been seen in the previous 1.5 s, and 7 selected an object. The cause is not confirmed yet.
+- Pointer: in recorded landmarks the index tip moved about 450 page px between pointing and pinching, and the palm centre 8 to 43 px in steady poses. With the index-tip pointer, 20 of 30 pinch clicks in one live session were ignored. After switching to the palm centre and a One Euro filter the cursor was reported as much smoother, dwell selection (at least 20 selections of about 1 s) was reported always correct, and pinch selection mostly correct but delayed (the pinch event needs a 6-frame hold, about 0.35 s at 17 fps).
+- `hand_state` reached the browser at 15.3 to 15.7 Hz with gaps of at most 105 ms (three readings).
+- The bin drop point is fixed and the drop height ignores objects already in the bin. Placing a third object was reported to leave the robot stuck and unresponsive; not yet understood.
 - rosbridge listens on all network interfaces (port 9090) with its default launch file. Anyone who can reach the machine could read the camera feed and publish robot commands. Use a trusted network or a firewall.
 - The dashboard webcam feed runs at about 7 to 8 Hz and the robot camera at about 5 Hz.
 

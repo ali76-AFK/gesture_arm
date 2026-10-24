@@ -111,7 +111,7 @@ def main():
                 pointer = (lm[8].x, lm[8].y)
         if hs_pub is not None and shown:
             send(hs_pub, {"data": json.dumps({"t": time.time(), "hands": {
-                sd: {"label": v[0], "conf": round(float(v[1]), 3), "x": round(float(v[3][8].x), 4), "y": round(float(v[3][8].y), 4)}
+                sd: {"label": v[0], "conf": round(float(v[1]), 3), "x": round(float(v[3][8].x), 4), "y": round(float(v[3][8].y), 4), "px": round(float(sum(v[3][i].x for i in (0, 5, 9, 13, 17)) / 5), 4), "py": round(float(sum(v[3][i].y for i in (0, 5, 9, 13, 17)) / 5), 4)}
                 for sd, v in shown.items()}})})
         if img_pub is not None and time.time() - last_img >= 0.1:
             last_img = time.time()

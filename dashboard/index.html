@@ -33,6 +33,7 @@
   #log, #gl { font:12px ui-monospace, monospace; max-height:170px; overflow:auto; white-space:pre-wrap; color:var(--dim); }
   #cursor { position:fixed; width:22px; height:22px; margin:-11px 0 0 -11px; border-radius:50%; border:3px solid var(--accent); background:rgba(74,163,255,.25); pointer-events:none; display:none; z-index:50; }
   #cursor.pinch { border-color:var(--ok); background:rgba(76,195,138,.5); }
+  #dwell { position:fixed; width:46px; height:46px; margin:-23px 0 0 -23px; border-radius:50%; pointer-events:none; display:none; z-index:49; -webkit-mask:radial-gradient(circle, transparent 14px, #000 15px); mask:radial-gradient(circle, transparent 14px, #000 15px); }
 </style>
 </head>
 <body>
@@ -42,6 +43,9 @@
   <span id="fps" class="badge">feeds: -</span>
   <label class="badge"><input type="checkbox" id="hand"> hand control (right hand: point = cursor, pinch = click)</label>
   <span class="badge">Esc turns hand control off</span>
+  <label class="badge"><input type="checkbox" id="dwellOn"> dwell select (1 s on a card or robot-image object)</label>
+  <span class="badge" id="hrate">hand_state: -</span>
+  <button class="badge" id="anchorTest">anchor test (8 s)</button>
 </header>
 <main>
   <section>
@@ -74,12 +78,13 @@
   </section>
 </main>
 <div id="cursor"></div>
+<div id="dwell"></div>
 <script src="vendor/roslib.min.js"></script>
 <script>
 const CFG = {
   url: "ws://localhost:9090",
   xMin: 0.15, xMax: 0.85, yMin: 0.10, yMax: 0.75,   // part of the webcam view that covers the whole page (starting guess)
-  smooth: 0.5, cursorMaxAgeMs: 600, pointerMaxAgeMs: 1500,
+  minCut: 1.0, beta: 0.005, cursorMaxAgeMs: 600, pointerMaxAgeMs: 1500, dropoutMs: 500, clickCooldownMs: 1000, dwellMs: 1000, dwellRadiusPx: 45,
   selectTtlS: 30, pickStaleMs: 60000, pickRadiusPx: 45, detStaleMs: 3000
 };
 const $ = id => document.getElementById(id);
@@ -123,7 +128,7 @@ topic("/selected_object", "std_msgs/String").subscribe(m => { S.sel = m.data.tri
 topic("/gesture", "std_msgs/String").subscribe(m => {
   let e; try { e = JSON.parse(m.data); } catch (x) { return; }
   const g = $("gl");
-  g.textContent = new Date().toLocaleTimeString() + "  " + e.side + " " + e.gesture + " (" + e.conf + ")\n" + g.textContent.split("\n").slice(0, 14).join("\n");
+  g.textContent = new Date().toLocaleTimeString() + "  " + e.side + " " + e.gesture + " (" + e.conf + ")\n" + g.textContent.split("\n").slice(0, 40).join("\n");
   if (e.side === "Right" && e.gesture === "pinch") handClick();
 });
 
@@ -134,38 +139,133 @@ function hoverUpdate(x, y) {
   if (t !== hovered) { hoverOff(); hovered = t; if (t) t.classList.add("hover"); }
 }
 function hideCursor() { $("cursor").style.display = "none"; hoverOff(); S.curSm = null; }
+// ---- hand cursor: palm-centre anchor, One Euro filter, pinch click, dwell select, anchor test ----
+class OneEuro {
+  constructor(minCut, beta, dCut) { this.minCut = minCut; this.beta = beta; this.dCut = dCut; this.reset(); }
+  reset() { this.x = null; this.dx = 0; this.t = 0; }
+  static alpha(cut, dt) { const tau = 1 / (2 * Math.PI * cut); return 1 / (1 + tau / dt); }
+  filter(v, t) {
+    if (this.x === null) { this.x = v; this.t = t; return v; }
+    const dt = Math.max((t - this.t) / 1000, 0.001); this.t = t;
+    this.dx += OneEuro.alpha(this.dCut, dt) * ((v - this.x) / dt - this.dx);
+    this.x += OneEuro.alpha(this.minCut + this.beta * Math.abs(this.dx), dt) * (v - this.x);
+    return this.x;
+  }
+}
+const fx = new OneEuro(CFG.minCut, CFG.beta, 1.0), fy = new OneEuro(CFG.minCut, CFG.beta, 1.0);
+const H = {frozen: null, lastSeen: 0, lastClickT: 0, dwell: null, arr: []};
+const toPageX = u => (1 - u - CFG.xMin) / (CFG.xMax - CFG.xMin) * innerWidth;
+const toPageY = v => (v - CFG.yMin) / (CFG.yMax - CFG.yMin) * innerHeight;
+
 function moveCursor(R) {
-  const c = $("cursor");
-  if (!$("hand").checked || !R) { hideCursor(); return; }
-  if (R.label === "pointing_up") {
-    const nx = clamp((1 - R.x - CFG.xMin) / (CFG.xMax - CFG.xMin)), ny = clamp((R.y - CFG.yMin) / (CFG.yMax - CFG.yMin));
-    const tx = nx * innerWidth, ty = ny * innerHeight;
-    S.curSm = S.curSm ? {x: S.curSm.x + CFG.smooth * (tx - S.curSm.x), y: S.curSm.y + CFG.smooth * (ty - S.curSm.y)} : {x: tx, y: ty};
-    S.pointer = {x: S.curSm.x, y: S.curSm.y, t: Date.now()};
-    S.pinchActive = false;
-  } else if (R.label === "pinch" && S.pointer && Date.now() - S.pointer.t < CFG.pointerMaxAgeMs) {
-    S.pinchActive = true;                       // keep the cursor where it was before the pinch started
-  } else { hideCursor(); return; }
-  c.style.display = "block"; c.className = S.pinchActive ? "pinch" : "";
+  const now = performance.now(), c = $("cursor");
+  const active = $("hand").checked && R && (R.label === "pointing_up" || R.label === "pinch");
+  if (!active) {
+    if (!$("hand").checked || now - H.lastSeen > CFG.dropoutMs) { hideCursor(); H.frozen = null; H.dwell = null; }
+    return;
+  }
+  if (getComputedStyle(c).display === "none") { fx.reset(); fy.reset(); H.frozen = null; }
+  H.lastSeen = now;
+  const raw = {x: toPageX(R.px ?? R.x), y: toPageY(R.py ?? R.y)};
+  const p = {x: clamp(fx.filter(raw.x, now) / innerWidth) * innerWidth, y: clamp(fy.filter(raw.y, now) / innerHeight) * innerHeight};
+  if (R.label === "pinch") {
+    if (!H.frozen) H.frozen = S.pointer ? {x: S.pointer.x, y: S.pointer.y} : {x: p.x, y: p.y};
+    S.pointer = {x: H.frozen.x, y: H.frozen.y, t: Date.now()};
+  } else {
+    H.frozen = null;
+    S.pointer = {x: p.x, y: p.y, t: Date.now()};
+  }
+  c.style.display = "block"; c.className = H.frozen ? "pinch" : "";
   c.style.left = S.pointer.x + "px"; c.style.top = S.pointer.y + "px";
   hoverUpdate(S.pointer.x, S.pointer.y);
+  dwellUpdate(S.pointer.x, S.pointer.y, now);
+  anchorSample(R, raw, p);
 }
+
 function handClick() {
   if (!$("hand").checked) return;
-  const p = S.pointer;
-  if (!p || Date.now() - p.t > CFG.pointerMaxAgeMs) { log("pinch ignored: no pointing position in the last " + CFG.pointerMaxAgeMs / 1000 + " s"); return; }
+  const now = Date.now(), p = S.pointer;
+  const age = p ? ((now - p.t) / 1000).toFixed(1) + " s" : "never";
+  if (now - H.lastClickT < CFG.clickCooldownMs) { log("pinch ignored: repeat within " + CFG.clickCooldownMs + " ms of the last click"); return; }
+  if (!p || now - p.t > CFG.pointerMaxAgeMs) { log("pinch ignored: cursor last updated " + age + " ago; right hand now: " + (S.lastR ? S.lastR.label + " " + S.lastR.conf : "not visible")); return; }
   const el = document.elementFromPoint(p.x, p.y), target = el && el.closest(".clickable");
   if (!target) { log("pinch at (" + Math.round(p.x) + "," + Math.round(p.y) + "): nothing clickable there"); return; }
-  log("pinch click on " + (target.dataset.cmd || target.dataset.obj || target.id));
+  H.lastClickT = now;
+  log("pinch click on " + (target.dataset.cmd || target.dataset.obj || target.id) + " (cursor age " + age + ")");
   target.dispatchEvent(new MouseEvent("click", {bubbles: true, clientX: p.x, clientY: p.y}));
 }
+
+function rcamObjectAt(cx, cy) {
+  const im = $("rcam"), r = im.getBoundingClientRect();
+  if (cx < r.left || cx > r.right || cy < r.top || cy > r.bottom || Date.now() - S.detT > CFG.detStaleMs) return null;
+  const u = (cx - r.left) * (im.naturalWidth || 640) / r.width, v = (cy - r.top) * (im.naturalHeight || 480) / r.height;
+  let best = null, bd = 1e9;
+  for (const [name, o] of Object.entries(S.det)) { const d = Math.hypot(o.px[0] - u, o.px[1] - v); if (d < bd) { bd = d; best = name; } }
+  return best && bd <= CFG.pickRadiusPx ? best : null;
+}
+function dwellUpdate(x, y, now) {
+  const ring = $("dwell");
+  if (!$("dwellOn").checked) { H.dwell = null; ring.style.display = "none"; return; }
+  const el = document.elementFromPoint(x, y), card = el && el.closest("[data-obj]");
+  const name = card ? card.dataset.obj : (el && el.id === "rcam" ? rcamObjectAt(x, y) : null);
+  if (!name || !S.det[name] || Date.now() - S.detT > CFG.detStaleMs) { H.dwell = null; ring.style.display = "none"; return; }
+  if (!H.dwell || H.dwell.name !== name || Math.hypot(x - H.dwell.x, y - H.dwell.y) > CFG.dwellRadiusPx) H.dwell = {name, x, y, t: now, done: false};
+  if (H.dwell.done) { ring.style.display = "none"; return; }
+  const frac = (now - H.dwell.t) / CFG.dwellMs;
+  ring.style.display = "block"; ring.style.left = x + "px"; ring.style.top = y + "px";
+  ring.style.background = "conic-gradient(var(--ok) " + Math.min(frac, 1) * 360 + "deg, transparent 0)";
+  if (frac >= 1) { H.dwell.done = true; log("dwell select " + name + " (" + Math.round(now - H.dwell.t) + " ms)"); select(name); }
+}
+
+const A = {on: false, s: null};
+const med = a => { const s = a.slice().sort((p, q) => p - q), n = s.length; return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2; };
+function stats(pts) {
+  if (pts.length < 5) return null;
+  let st = 0;
+  for (let i = 1; i < pts.length; i++) st += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+  return {step: st / (pts.length - 1), mx: med(pts.map(q => q[0])), my: med(pts.map(q => q[1]))};
+}
+function anchorSample(R, raw, p) {
+  if (!A.on) return;
+  const s = A.s[R.label];
+  if (!s) return;
+  s.tip.push([toPageX(R.x), toPageY(R.y)]); s.palm.push([raw.x, raw.y]); s.flt.push([p.x, p.y]);
+}
+function finishAnchor() {
+  A.on = false;
+  const out = [], names = {tip: "index tip raw", palm: "palm centre raw", flt: "palm centre filtered"};
+  for (const k of ["tip", "palm", "flt"]) {
+    const a = stats(A.s.pointing_up[k]), b = stats(A.s.pinch[k]);
+    if (!a || !b) { out.push(names[k] + ": not enough frames (pointing " + A.s.pointing_up[k].length + ", pinch " + A.s.pinch[k].length + ")"); continue; }
+    out.push(names[k] + ": jitter pointing " + a.step.toFixed(1) + " px/frame, pinch " + b.step.toFixed(1) + " px/frame, shift pointing to pinch " + Math.hypot(a.mx - b.mx, a.my - b.my).toFixed(0) + " px");
+  }
+  log("ANCHOR TEST (" + A.s.pointing_up.tip.length + " pointing and " + A.s.pinch.tip.length + " pinch frames) | " + out.join(" | "));
+}
+$("anchorTest").addEventListener("click", () => {
+  const mk = () => ({tip: [], palm: [], flt: []});
+  A.s = {pointing_up: mk(), pinch: mk()}; A.on = true;
+  log("anchor test started: point at the screen centre and hold still, then pinch and hold still (8 s in total)");
+  setTimeout(finishAnchor, 8000);
+});
+
 topic("/hand_state", "std_msgs/String", {queue_length: 1}).subscribe(m => {
   let h; try { h = JSON.parse(m.data); } catch (x) { return; }
+  H.arr.push(performance.now());
   S.handT = Date.now();
   const L = h.hands.Left, R = h.hands.Right;
+  S.lastR = R || null;
   $("handtxt").textContent = (L ? "Left: " + L.label + " " + L.conf : "Left: -") + "   |   " + (R ? "Right: " + R.label + " " + R.conf : "Right: -");
   moveCursor(R);
 });
+setInterval(() => {
+  const now = performance.now();
+  H.arr = H.arr.filter(t => now - t < 3000);
+  let gap = 0;
+  for (let i = 1; i < H.arr.length; i++) gap = Math.max(gap, H.arr[i] - H.arr[i - 1]);
+  $("hrate").textContent = "hand_state: " + (H.arr.length / 3).toFixed(1) + " Hz, longest gap " + gap.toFixed(0) + " ms";
+  if (getComputedStyle($("cursor")).display === "none") { $("dwell").style.display = "none"; H.dwell = null; }
+}, 500);
+
 $("hand").addEventListener("change", () => { if (!$("hand").checked) hideCursor(); log("hand control " + ($("hand").checked ? "ON" : "off")); });
 document.addEventListener("keydown", e => { if (e.key === "Escape" && $("hand").checked) { $("hand").checked = false; hideCursor(); log("hand control off (Esc)"); } });
 

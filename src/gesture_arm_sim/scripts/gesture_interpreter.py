@@ -72,7 +72,7 @@ class Interpreter(Node):
             self.send(self.arm_pub, "/arm_command", "stop")
             return
         if side == "Right":
-            self.get_logger().info(f"right hand {g}: not wired yet (needs the dashboard)")
+            self.get_logger().info(f"right hand {g}: handled by the dashboard, no robot command")
             return
         busy = self.busy()
         if g in LEFT_MAP:
