@@ -7,7 +7,7 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image, CameraInfo
 
-CAM = (0.6, 0.0, 1.0)      # camera position in base_link, looking straight down (as in the detector)
+CAM = (0.6, 0.0, 1.25)      # camera position in base_link, looking straight down (as in the detector)
 rclpy.init()
 n = Node("pixel_world_check")
 got = {}
@@ -34,7 +34,7 @@ def rng(m):
 
 
 print(f"intrinsics fx={fx:.1f} fy={fy:.1f} cx={cx:.1f} cy={cy:.1f} | valid depth pixels {ok.sum()}/{ok.size}")
-print(f"expected view of a surface at z=0.20: x {CAM[0] - cy * 0.8 / fy:.3f}..{CAM[0] + cy * 0.8 / fy:.3f}   y {-cx * 0.8 / fx:.3f}..{cx * 0.8 / fx:.3f}")
+print(f"expected view of a surface at z=0.20: x {CAM[0] - cy * (CAM[2] - 0.20) / fy:.3f}..{CAM[0] + cy * (CAM[2] - 0.20) / fy:.3f}   y {-cx * (CAM[2] - 0.20) / fx:.3f}..{cx * (CAM[2] - 0.20) / fx:.3f}")
 tbl = ok & (np.abs(Z - 0.20) < 0.01)
 print(f"table-top pixels (z within 1 cm of 0.200): {tbl.sum()}  -> {rng(tbl)}")
 print(f"   their height: median {np.median(Z[tbl]):.4f} m | std {Z[tbl].std() * 1000:.1f} mm | min {Z[tbl].min():.4f} | max {Z[tbl].max():.4f}")

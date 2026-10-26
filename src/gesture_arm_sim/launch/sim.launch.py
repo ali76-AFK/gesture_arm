@@ -40,7 +40,7 @@ def generate_launch_description():
 
     cam_tf = Node(
         package="tf2_ros", executable="static_transform_publisher",
-        arguments=["--x", "0.6", "--y", "0", "--z", "1.0",
+        arguments=["--x", "0.6", "--y", "0", "--z", "1.25",
                    "--roll", "0", "--pitch", "1.5708", "--yaw", "0",
                    "--frame-id", "base_link", "--child-frame-id", "camera_link"],
         parameters=[{"use_sim_time": True}])

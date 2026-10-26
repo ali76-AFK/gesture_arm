@@ -11,7 +11,7 @@ One machine only: Ubuntu 24.04, Docker 29.9.1 with Compose v5, Intel Arc integra
 
 | Part | State |
 |---|---|
-| Gazebo world (table, bin, 4 objects, overhead RGB-D camera) | working |
+| Gazebo world (table, bin, 4 objects, overhead RGB-D camera at z = 1.25 m that sees the whole table) | working |
 | UR5e + two-finger gripper in Gazebo, MoveIt planning | working |
 | `arm_control`: named poses, open/close, stop, collision scene | working |
 | `object_detector`: colour segmentation, 3D position from depth | working in simulation (errors of 2 mm or less in the test) |
@@ -127,13 +127,15 @@ Rules: stop works from either hand at any time. Other commands are ignored while
 - `hand_state` reached the browser at 15.3 to 15.7 Hz with gaps of at most 105 ms (three readings).
 - Reach (UR5e, tool pointing down, collision-checked IK, 3 seeds per cell, `scripts/reach_map.py`): at fingertip height 0.23 m 143 of 221 grid cells (x 0.20 to 1.00, y -0.6 to 0.6, 5 by 10 cm) were reachable, at 0.30 m 138, at 0.38 m 131. Nothing at x >= 0.90. A single IK seed missed many reachable cells.
 - Depth to world conversion (`scripts/pixel_world_check.py`): table plane at z = 0.2000 m, bin outer box within 2 mm.
+- Overhead camera at z = 1.25 m: all four objects were detected within 2 mm in x and y and 1 mm in height, and the whole table (x 0.2 to 1.0, y -0.5 to 0.5) is visible (`scripts/detect_once.py`, `scripts/pixel_world_check.py`).
+- Simulation clock: in two sessions `/clock` had no ROS publisher although the clock bridge process was running. Nodes started with `use_sim_time:=true` then stalled: `arm_control` never applied the table, bin and gripper collision entries (every `home` failed with error_code -10) and the detector published nothing. A clean restart fixed it; the cause is unknown. `diag/clock_gate.sh` checks the clock; `diag/health_check.sh` and `diag/clock_check.sh` collect the evidence.
 - The bin drop point is fixed and the drop height ignores objects already in the bin. Placing a third object was reported to leave the robot stuck and unresponsive; not yet understood.
 - rosbridge listens on all network interfaces (port 9090) with its default launch file. Anyone who can reach the machine could read the camera feed and publish robot commands. Use a trusted network or a firewall.
 - The dashboard webcam feed runs at about 7 to 8 Hz and the robot camera at about 5 Hz.
 
 ## Dashboard
 
-Eight processes, one terminal each. Check `docker ps` is clean first.
+Eight processes, one terminal each. Check `docker ps` is clean first. Once the simulation has been up for about 60 s, run `./scripts/run.sh exec 'bash /ws/diag/clock_gate.sh'`: it must print `CLOCK OK` before you start the other processes, and `arm_control` must then print `collision scene ... applied: True` within a few seconds.
 
 ~~~bash
 ./scripts/run.sh sim

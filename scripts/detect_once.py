@@ -2,7 +2,7 @@ import time, numpy as np, cv2, rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image, CameraInfo
 
-CAM = (0.6, 0.0, 1.0)     # camera position in base_link; looks straight down (matches make_world.py)
+CAM = (0.6, 0.0, 1.25)     # camera position in base_link; looks straight down (matches make_world.py)
 # HSV ranges (OpenCV hue 0-179). Table is tan: hue ~15, saturation lower than the objects.
 COLORS = {
     "red_cube":      [((0, 150, 70), (6, 255, 255)), ((172, 150, 70), (179, 255, 255))],

@@ -6,7 +6,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image, CameraInfo, CompressedImage
 from std_msgs.msg import String
 
-CAM = (0.6, 0.0, 1.0)     # camera position in base_link; looks straight down (matches make_world.py)
+CAM = (0.6, 0.0, 1.25)     # camera position in base_link; looks straight down (matches make_world.py)
 COLORS = {
     "red_cube":      [((0, 150, 70), (6, 255, 255)), ((172, 150, 70), (179, 255, 255))],
     "green_cube":    [((40, 100, 60), (85, 255, 255))],

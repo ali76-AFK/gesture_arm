@@ -58,7 +58,7 @@ the_bin = bin_model("bin", 0.55, -0.33, TABLE_TOP)
 camera = """
     <model name="overhead_cam">
       <static>true</static>
-      <pose>0.6 0 1.0 0 1.5708 0</pose>
+      <pose>0.6 0 1.25 0 1.5708 0</pose>
       <link name="link">
         <visual name="v"><geometry><box><size>0.06 0.06 0.04</size></box></geometry>
           <material><ambient>0.1 0.1 0.1 1</ambient><diffuse>0.1 0.1 0.1 1</diffuse></material></visual>
