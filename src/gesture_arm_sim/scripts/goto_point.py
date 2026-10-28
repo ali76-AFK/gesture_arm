@@ -273,8 +273,11 @@ class GotoPoint(Node):
         except Abort:
             self.status = "aborted"
         except Exception as e:
-            self.status = f"failed: {e}"
-            self.get_logger().error(self.status)
+            if self.abort.is_set():
+                self.status = "aborted"
+            else:
+                self.status = f"failed: {e}"
+                self.get_logger().error(self.status)
         finally:
             self.moving, self.cur = False, None
             self.publish_state()
