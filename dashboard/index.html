@@ -34,6 +34,11 @@
   #cursor { position:fixed; width:22px; height:22px; margin:-11px 0 0 -11px; border-radius:50%; border:3px solid var(--accent); background:rgba(74,163,255,.25); pointer-events:none; display:none; z-index:50; }
   #cursor.pinch { border-color:var(--ok); background:rgba(76,195,138,.5); }
   #dwell { position:fixed; width:46px; height:46px; margin:-23px 0 0 -23px; border-radius:50%; pointer-events:none; display:none; z-index:49; -webkit-mask:radial-gradient(circle, transparent 14px, #000 15px); mask:radial-gradient(circle, transparent 14px, #000 15px); }
+  .vid { position:relative; }
+  #wpl { position:absolute; inset:0; pointer-events:none; }
+  .wp { position:absolute; width:26px; height:26px; margin:-13px 0 0 -13px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; color:#000; border:2px solid #fff; }
+  .wp.ok { background:var(--ok); }
+  .wp.no { background:var(--bad); }
 </style>
 </head>
 <body>
@@ -44,6 +49,7 @@
   <label class="badge"><input type="checkbox" id="hand"> hand control (right hand: point = cursor, pinch = click)</label>
   <span class="badge">Esc turns hand control off</span>
   <label class="badge"><input type="checkbox" id="dwellOn"> dwell select (1 s on a card or robot-image object)</label>
+  <label class="badge"><input type="checkbox" id="gotoOn"> go-to mode (clicks on the robot image set waypoints)</label>
   <span class="badge" id="hrate">hand_state: -</span>
   <button class="badge" id="anchorTest">anchor test (8 s)</button>
 </header>
@@ -56,7 +62,7 @@
   </section>
   <section>
     <div class="panel"><h2>Robot camera</h2>
-      <div class="vid"><img id="rcam" class="clickable" alt="waiting for the detector feed"></div>
+      <div class="vid"><img id="rcam" class="clickable" alt="waiting for the detector feed"><div id="wpl"></div></div>
       <div class="cap">Click near an object to select it. Pick it with a left thumbs up or the Confirm button.</div></div>
     <div class="panel"><h2>Log</h2><div id="log"></div></div>
   </section>
@@ -69,6 +75,10 @@
       <div class="kv"><span>expires in</span><b id="ttl">-</b></div>
       <div id="objs" style="margin-top:6px"></div>
       <button id="confirm" style="width:100%">Confirm pick (same as left thumbs up)</button></div>
+    <div class="panel"><h2>Go-to</h2>
+      <div class="kv"><span>status</span><b id="gstatus">-</b></div>
+      <div class="kv"><span>waypoints</span><b id="gwps">0</b></div>
+      <div class="row" style="margin-top:6px"><button id="gGo">Go to waypoints (mouse only)</button><button class="clickable" id="gClear">Clear</button></div></div>
     <div class="panel"><h2>Commands</h2>
       <div class="row">
         <button class="clickable" data-cmd="home">Home</button>
@@ -85,7 +95,7 @@ const CFG = {
   url: "ws://localhost:9090",
   xMin: 0.15, xMax: 0.85, yMin: 0.10, yMax: 0.75,   // part of the webcam view that covers the whole page (starting guess)
   minCut: 1.0, beta: 0.005, cursorMaxAgeMs: 600, pointerMaxAgeMs: 1500, dropoutMs: 500, clickCooldownMs: 1000, dwellMs: 1000, dwellRadiusPx: 45,
-  selectTtlS: 30, pickStaleMs: 60000, pickRadiusPx: 45, detStaleMs: 3000
+  selectTtlS: 30, pickStaleMs: 60000, pickRadiusPx: 45, detStaleMs: 3000, gotoStaleMs: 3000
 };
 const $ = id => document.getElementById(id);
 const clamp = v => Math.max(0, Math.min(1, v));
@@ -100,15 +110,20 @@ const topic = (name, type, opts = {}) => new ROSLIB.Topic(Object.assign({ros, na
 const pubArm = topic("/arm_command", "std_msgs/String");
 const pubPick = topic("/pick_place_command", "std_msgs/String");
 const pubSel = topic("/selected_object", "std_msgs/String");
+const pubGotoClick = topic("/goto/click", "std_msgs/String");
+const pubGotoGo = topic("/goto/go", "std_msgs/String");
+const pubGotoClear = topic("/goto/clear", "std_msgs/String");
 const send = (t, text) => t.publish(new ROSLIB.Message({data: text}));
 
 const S = {arm: "", pick: "", pickT: 0, sel: null, selT: 0, det: {}, detT: 0, handT: 0, curSm: null, pointer: null, pinchActive: false};
 const cnt = {cam: [], rcam: []};
+const G = {s: null, t: 0};
+const gotoMoving = () => !!(G.s && G.s.moving) && Date.now() - G.t < CFG.gotoStaleMs;
 const armMoving = () => S.arm.startsWith("moving:");
 const pickRunning = () => S.pick.startsWith("running:") && Date.now() - S.pickT < CFG.pickStaleMs;
 
 function command(c) {
-  if (c !== "stop" && (armMoving() || pickRunning())) { log("ignored " + c + ": robot busy (" + (armMoving() ? S.arm : S.pick) + ")"); return; }
+  if (c !== "stop" && (armMoving() || pickRunning() || gotoMoving())) { log("ignored " + c + ": robot busy (" + (armMoving() ? S.arm : pickRunning() ? S.pick : "go-to moving") + ")"); return; }
   send(pubArm, c); log("sent /arm_command " + c);
 }
 document.querySelectorAll("[data-cmd]").forEach(b => b.addEventListener("click", () => command(b.dataset.cmd)));
@@ -116,7 +131,7 @@ document.querySelectorAll("[data-cmd]").forEach(b => b.addEventListener("click",
 function select(name) { S.sel = name; S.selT = Date.now(); send(pubSel, name); log("selected " + name); renderSel(); }
 $("confirm").addEventListener("click", () => {
   if (!S.sel || Date.now() - S.selT > CFG.selectTtlS * 1000) { log("confirm ignored: nothing selected in the last " + CFG.selectTtlS + " s"); return; }
-  if (armMoving() || pickRunning()) { log("confirm ignored: robot busy"); return; }
+  if (armMoving() || pickRunning() || gotoMoving()) { log("confirm ignored: robot busy"); return; }
   send(pubPick, S.sel); log("sent /pick_place_command " + S.sel);
   send(pubSel, ""); S.sel = null; renderSel();
 });
@@ -205,7 +220,7 @@ function rcamObjectAt(cx, cy) {
 }
 function dwellUpdate(x, y, now) {
   const ring = $("dwell");
-  if (!$("dwellOn").checked) { H.dwell = null; ring.style.display = "none"; return; }
+  if (!$("dwellOn").checked || $("gotoOn").checked) { H.dwell = null; ring.style.display = "none"; return; }
   const el = document.elementFromPoint(x, y), card = el && el.closest("[data-obj]");
   const name = card ? card.dataset.obj : (el && el.id === "rcam" ? rcamObjectAt(x, y) : null);
   if (!name || !S.det[name] || Date.now() - S.detT > CFG.detStaleMs) { H.dwell = null; ring.style.display = "none"; return; }
@@ -296,10 +311,52 @@ function renderSel() {
 $("rcam").addEventListener("click", ev => {
   const im = $("rcam"), r = im.getBoundingClientRect(), w = im.naturalWidth || 640, h = im.naturalHeight || 480;
   const u = (ev.clientX - r.left) * w / r.width, v = (ev.clientY - r.top) * h / r.height;
+  if ($("gotoOn").checked) {
+    if (!G.s || Date.now() - G.t > CFG.gotoStaleMs) { log("go-to click ignored: no fresh /goto/state (is goto_point running?)"); return; }
+    if (gotoMoving()) { log("go-to click ignored: moving (use STOP)"); return; }
+    send(pubGotoClick, JSON.stringify({u: Math.round(u * 10) / 10, v: Math.round(v * 10) / 10}));
+    log("go-to click at pixel (" + Math.round(u) + "," + Math.round(v) + ")");
+    return;
+  }
   let best = null, bd = 1e9;
   for (const [name, o] of Object.entries(S.det)) { const d = Math.hypot(o.px[0] - u, o.px[1] - v); if (d < bd) { bd = d; best = name; } }
   if (best && bd <= CFG.pickRadiusPx && Date.now() - S.detT < CFG.detStaleMs) select(best);
   else log("no object near (" + Math.round(u) + "," + Math.round(v) + ")");
+});
+
+// ---- go-to: markers and buttons (backend: goto_point.py, topics /goto/click /goto/go /goto/clear /goto/state) ----
+function renderGoto() {
+  const st = G.s, fresh = !!st && Date.now() - G.t < CFG.gotoStaleMs;
+  $("gstatus").textContent = !st ? "no /goto/state" : (fresh ? st.status : "stale: " + st.status);
+  const wps = (st && st.waypoints) || [];
+  $("gwps").textContent = wps.length + (wps.some(w => w.reachable !== true) ? " (some not reachable)" : "");
+  const box = $("wpl"), sig = JSON.stringify(wps.map(w => [w.n, w.u, w.v, w.reachable]));
+  if (box.dataset.sig === sig) return;
+  box.dataset.sig = sig; box.textContent = "";
+  const im = $("rcam"), iw = im.naturalWidth || 640, ih = im.naturalHeight || 480;
+  for (const w of wps) {
+    const d = document.createElement("div");
+    d.className = "wp " + (w.reachable === true ? "ok" : "no");
+    d.textContent = w.n; d.style.left = (w.u / iw * 100) + "%"; d.style.top = (w.v / ih * 100) + "%";
+    box.appendChild(d);
+  }
+}
+topic("/goto/state", "std_msgs/String", {queue_length: 1}).subscribe(m => {
+  try { G.s = JSON.parse(m.data); G.t = Date.now(); } catch (x) { return; }
+  renderGoto();
+});
+setInterval(renderGoto, 500);
+$("gGo").addEventListener("click", () => {
+  const st = G.s, wps = (st && st.waypoints) || [];
+  if (!st || Date.now() - G.t > CFG.gotoStaleMs) { log("go ignored: no fresh /goto/state"); return; }
+  if (!wps.length) { log("go ignored: no waypoints"); return; }
+  if (wps.some(w => w.reachable !== true)) { log("go ignored: a waypoint is not reachable"); return; }
+  if (gotoMoving() || armMoving() || pickRunning()) { log("go ignored: robot busy"); return; }
+  send(pubGotoGo, "go"); log("sent /goto/go");
+});
+$("gClear").addEventListener("click", () => {
+  if (gotoMoving()) { log("clear ignored: moving (use STOP)"); return; }
+  send(pubGotoClear, "clear"); log("sent /goto/clear");
 });
 
 topic("/dashboard/webcam/compressed", "sensor_msgs/CompressedImage", {queue_length: 1}).subscribe(m => { $("cam").src = "data:image/jpeg;base64," + m.data; cnt.cam.push(Date.now()); });
