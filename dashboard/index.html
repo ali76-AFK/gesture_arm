@@ -39,6 +39,7 @@
   .wp { position:absolute; width:26px; height:26px; margin:-13px 0 0 -13px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; color:#000; border:2px solid #fff; }
   .wp.ok { background:var(--ok); }
   .wp.no { background:var(--bad); }
+  .wp.unk { background:#8a8f98; }
 </style>
 </head>
 <body>
@@ -329,14 +330,14 @@ function renderGoto() {
   const st = G.s, fresh = !!st && Date.now() - G.t < CFG.gotoStaleMs;
   $("gstatus").textContent = !st ? "no /goto/state" : (fresh ? st.status : "stale: " + st.status);
   const wps = (st && st.waypoints) || [];
-  $("gwps").textContent = wps.length + (wps.some(w => w.reachable !== true) ? " (some not reachable)" : "");
+  $("gwps").textContent = wps.length + (wps.some(w => w.reachable === false) ? " (some not reachable)" : wps.some(w => w.reachable == null) ? " (reachability unknown)" : "");
   const box = $("wpl"), sig = JSON.stringify(wps.map(w => [w.n, w.u, w.v, w.reachable]));
   if (box.dataset.sig === sig) return;
   box.dataset.sig = sig; box.textContent = "";
   const im = $("rcam"), iw = im.naturalWidth || 640, ih = im.naturalHeight || 480;
   for (const w of wps) {
     const d = document.createElement("div");
-    d.className = "wp " + (w.reachable === true ? "ok" : "no");
+    d.className = "wp " + (w.reachable === true ? "ok" : w.reachable === false ? "no" : "unk");
     d.textContent = w.n; d.style.left = (w.u / iw * 100) + "%"; d.style.top = (w.v / ih * 100) + "%";
     box.appendChild(d);
   }
@@ -350,7 +351,7 @@ $("gGo").addEventListener("click", () => {
   const st = G.s, wps = (st && st.waypoints) || [];
   if (!st || Date.now() - G.t > CFG.gotoStaleMs) { log("go ignored: no fresh /goto/state"); return; }
   if (!wps.length) { log("go ignored: no waypoints"); return; }
-  if (wps.some(w => w.reachable !== true)) { log("go ignored: a waypoint is not reachable"); return; }
+  if (wps.some(w => w.reachable !== true)) { log("go ignored: a waypoint is not reachable, or its reachability is unknown"); return; }
   if (gotoMoving() || armMoving() || pickRunning()) { log("go ignored: robot busy"); return; }
   send(pubGotoGo, "go"); log("sent /goto/go");
 });
