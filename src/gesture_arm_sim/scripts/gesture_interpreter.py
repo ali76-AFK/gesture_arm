@@ -12,6 +12,11 @@ GOTO_STATE_MAX_AGE = 3.0   # s: a /goto/state older than this counts as missing
 GOTO_WP_TTL = 60.0         # s: waypoints unchanged for longer than this are not started by gesture
 GOTO_CONFIRM_MIN = 0.8     # s: go-to needs a second thumbs up at least this long after the first
 GOTO_CONFIRM_MAX = 5.0     # s: ... and at most this long after
+HOLD_LABEL = "thumbs_up"   # /hand_state label of the left hand that confirms a go-to
+GOTO_HOLD_SEC = 2.0        # s: left thumbs up must stay on screen this long (after the arming thumbs up) to start a go-to
+GOTO_HOLD_CONF = 0.8       # confidence a /hand_state message needs to count towards the hold
+GOTO_HOLD_GRACE = 0.4      # s: a break in qualifying messages longer than this restarts the hold
+GOTO_HOLD_AFTER_ARM = 1.0 # s: the go-to starts no sooner than this after the arming thumbs up
 SELECT_TTL = 30.0     # s: a selected object expires after this
 PICK_STALE = 60.0     # s: a pick with no state message for this long is assumed finished
 
@@ -30,9 +35,11 @@ class Interpreter(Node):
         self.create_subscription(String, "/pick_place_state", self.on_pick_state, 10)
         self.create_subscription(String, "/selected_object", self.on_selected, 10)
         self.create_subscription(String, "/goto/state", self.on_goto_state, 10)
+        self.create_subscription(String, "/hand_state", self.on_hand_state, 20)
         self.arm_state, self.pick_state, self.pick_t = "", "", 0.0
         self.selected, self.selected_t = None, 0.0
         self.goto, self.goto_t, self.goto_sig, self.goto_wp_t, self.goto_armed_t = None, 0.0, [], 0.0, 0.0
+        self.hold_start, self.hold_last, self.hold_fired = None, 0.0, False
         self.last_sent = {}
         self.get_logger().info(f"gesture_interpreter ready (dry_run={self.dry})")
 
@@ -50,6 +57,49 @@ class Interpreter(Node):
         sig = [(w.get("n"), w.get("u"), w.get("v")) for w in (g.get("waypoints") or [])]
         if sig != self.goto_sig:
             self.goto_sig, self.goto_wp_t = sig, time.time()
+
+    def on_hand_state(self, m):
+        try:
+            h = (json.loads(m.data).get("hands") or {}).get("Left")
+        except (ValueError, AttributeError):
+            return
+        self.hold_update(h, time.time())
+
+    def hold_update(self, h, now):
+        """Tracks how long the LEFT hand has shown HOLD_LABEL without a break (a break = more than GOTO_HOLD_GRACE s
+        without a qualifying message). A go-to started by the hold needs the arming thumbs up inside the same run."""
+        ok = False
+        if h:
+            try:
+                ok = h.get("label") == HOLD_LABEL and float(h.get("conf", 0.0)) >= GOTO_HOLD_CONF
+            except (TypeError, ValueError):
+                ok = False
+        if ok:
+            if self.hold_start is None or now - self.hold_last > GOTO_HOLD_GRACE:
+                self.hold_start, self.hold_fired = now, False
+            self.hold_last = now
+            self.hold_try(now)
+        elif self.hold_start is not None and now - self.hold_last > GOTO_HOLD_GRACE:
+            self.hold_start = None
+
+    def hold_try(self, now):
+        if self.hold_fired or not self.goto_armed_t:
+            return
+        if self.goto_armed_t < self.hold_start - 0.3 or now - self.goto_armed_t > GOTO_CONFIRM_MAX:
+            return
+        if self.hold_last - self.hold_start < GOTO_HOLD_SEC or now - self.goto_armed_t < GOTO_HOLD_AFTER_ARM:
+            return
+        self.hold_fired = True
+        self.goto_armed_t = 0.0
+        why = self.goto_ready()
+        busy = self.busy()
+        fresh = self.selected and now - self.selected_t < SELECT_TTL
+        if why or busy or fresh:
+            self.get_logger().info("hold confirm ignored: " + (why or busy or "an object is selected"))
+            return
+        if not self.repeated("goto"):
+            self.get_logger().info(f"go-to confirmed: left thumbs up held {GOTO_HOLD_SEC:.0f} s")
+            self.send(self.goto_go_pub, "/goto/go", "go")
 
     def goto_ready(self):
         """'' if a go-to may be started by gesture, else the reason it may not."""

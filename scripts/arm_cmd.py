@@ -35,9 +35,12 @@ def main():
         rclpy.spin_once(n, timeout_sec=0.1)
     missing = [r for r in need if r not in names]
     if missing or pub.get_subscription_count() < len(infos):
-        print("NOT SENT: required %s, subscribers seen %s, matched %d of %d"
-              % (need, sorted(set(names)), pub.get_subscription_count(), len(infos)))
-        sys.exit(1)
+        if cmd != "stop":
+            print("NOT SENT: required %s, subscribers seen %s, matched %d of %d"
+                  % (need, sorted(set(names)), pub.get_subscription_count(), len(infos)))
+            sys.exit(1)
+        print("WARNING: stop is sent anyway, but not matched: %s (matched %d of %d)"
+              % (missing, pub.get_subscription_count(), len(infos)))
     time.sleep(0.3)
     pub.publish(String(data=cmd))
     for _ in range(10):
