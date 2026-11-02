@@ -18,6 +18,8 @@ GOTO_HOLD_CONF = 0.8       # confidence a /hand_state message needs to count tow
 GOTO_HOLD_GRACE = 0.4      # s: a break in qualifying messages longer than this restarts the hold
 GOTO_HOLD_AFTER_ARM = 1.0 # s: the go-to starts no sooner than this after the arming thumbs up
 SELECT_TTL = 30.0     # s: a selected object expires after this
+PLACE_STATE_MAX_AGE = 3.0   # s: a /place/state older than this counts as missing
+GOAL_TTL = 30.0             # s: a place goal expires this long after it was checked
 PICK_STALE = 60.0     # s: a pick with no state message for this long is assumed finished
 
 
@@ -30,17 +32,21 @@ class Interpreter(Node):
         self.pick_pub = self.create_publisher(String, "/pick_place_command", 10)
         self.goto_go_pub = self.create_publisher(String, "/goto/go", 10)
         self.goto_clear_pub = self.create_publisher(String, "/goto/clear", 10)
+        self.sel_pub = self.create_publisher(String, "/selected_object", 10)
+        self.place_clear_pub = self.create_publisher(String, "/place/clear", 10)
         self.create_subscription(String, "/gesture", self.on_gesture, 10)
         self.create_subscription(String, "/arm_state", self.on_arm_state, 10)
         self.create_subscription(String, "/pick_place_state", self.on_pick_state, 10)
         self.create_subscription(String, "/selected_object", self.on_selected, 10)
         self.create_subscription(String, "/goto/state", self.on_goto_state, 10)
         self.create_subscription(String, "/hand_state", self.on_hand_state, 20)
+        self.create_subscription(String, "/place/state", self.on_place_state, 10)
         self.arm_state, self.pick_state, self.pick_t = "", "", 0.0
         self.selected, self.selected_t = None, 0.0
         self.goto, self.goto_t, self.goto_sig, self.goto_wp_t, self.goto_armed_t = None, 0.0, [], 0.0, 0.0
         self.hold_start, self.hold_last, self.hold_fired = None, 0.0, False
         self.last_sent = {}
+        self.place, self.place_t = None, 0.0
         self.get_logger().info(f"gesture_interpreter ready (dry_run={self.dry})")
 
     def on_arm_state(self, m): self.arm_state = m.data
@@ -133,6 +139,35 @@ class Interpreter(Node):
             self.goto_armed_t = now
             self.get_logger().info(f"go-to armed: thumbs up again within {GOTO_CONFIRM_MAX:.0f} s to start")
 
+    def on_place_state(self, m):
+        try:
+            self.place = json.loads(m.data)
+        except ValueError:
+            return
+        self.place_t = time.time()
+
+    def place_goal(self):
+        """(goal, why). goal = {"x", "y"} if a checked, valid, fresh place goal exists for the selected object.
+        why != '' means the confirm must NOT go ahead (a goal was clicked but is pending, failed its check, or is not usable). (None, '') = no goal was clicked: pick to the bin as before."""
+        p = self.place
+        if p is None or time.time() - self.place_t > PLACE_STATE_MAX_AGE:
+            return None, ""
+        if p.get("object") != self.selected or not p.get("te"):
+            return None, ""
+        if p.get("pending"):
+            return None, "is still being checked"
+        if time.time() - float(p["te"]) > GOAL_TTL:
+            return None, f"expired (checked more than {GOAL_TTL:.0f} s ago)"
+        if not p.get("goal") or not p.get("ok"):
+            return None, "not valid: " + "; ".join(p.get("fails") or ["unknown reason"])
+        return {"x": p["goal"]["x"], "y": p["goal"]["y"]}, ""
+
+    def clear_selection(self):
+        """Forget the selection and the place goal here, and tell the dashboard and pick_place to do the same."""
+        self.selected = None
+        self.send(self.sel_pub, "/selected_object", "")
+        self.send(self.place_clear_pub, "/place/clear", "clear")
+
     def on_selected(self, m):
         self.selected, self.selected_t = m.data.strip().lower() or None, time.time()
         self.get_logger().info(f"selected object: {self.selected}")
@@ -189,12 +224,17 @@ class Interpreter(Node):
                 self.get_logger().info(f"ignored confirm: {busy}")
             elif not fresh:
                 self.goto_confirm()
-            elif not self.repeated("confirm"):
-                self.send(self.pick_pub, "/pick_place_command", self.selected)
-                self.selected = None
+            else:
+                goal, why = self.place_goal()
+                if why:
+                    self.get_logger().info(f"ignored confirm: place goal {why}")
+                elif not self.repeated("confirm"):
+                    text = json.dumps({"object": self.selected, "goal": goal}) if goal else self.selected
+                    self.send(self.pick_pub, "/pick_place_command", text)
+                    self.clear_selection()
         elif g == "thumbs_down":
-            self.selected = None
-            self.get_logger().info("cancel: selection cleared")
+            self.clear_selection()
+            self.get_logger().info("cancel: selection and place goal cleared")
             self.goto_armed_t = 0.0
             if self.goto and not self.goto.get("moving") and self.goto.get("waypoints"):
                 self.send(self.goto_clear_pub, "/goto/clear", "clear")

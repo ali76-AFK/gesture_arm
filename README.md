@@ -151,3 +151,18 @@ Eight processes, one terminal each. Check `docker ps` is clean first. Once the s
 Open http://localhost:8080/index.html. Click an object card or the robot camera image to select it, then confirm with a left thumbs up or the Confirm button. Tick "hand control" to use the right hand: pointing moves the cursor and a pinch clicks. Esc turns hand control off. Confirm pick cannot be clicked by hand.
 
 `dashboard/vendor/roslib.min.js` is roslib 1.4.1 (BSD-2-Clause, licence in `dashboard/vendor/roslib-LICENSE.txt`).
+
+## Pick and place to a clicked spot (place goal)
+
+Select an object (a ring appears around it), then click where it should go on the robot camera image. A dashed circle shows the goal: green = valid, amber = valid with a warning, red = refused (the reason is shown). A left thumbs up (or the Confirm button) runs it; a left thumbs down cancels the selection and the goal. With no goal set, confirm drops the object in the bin as before. A goal that is still being checked, refused or expired is never turned into a bin pick.
+
+How it works (`src/gesture_arm_sim/scripts/pick_place.py`, `dashboard/place.js`):
+- A goal click becomes a world point from the depth image; a click on another object's top face snaps to that object's centre.
+- Release height (fingertip frame) = measured support height + 0.05 m + hang, where hang = grasp height - object bottom. Support = highest depth-measured surface under the object's footprint (table 0.200, bin floor 0.210, top of another object).
+- Checks before the grasp (at click time for the marker, and again after the arm homes): footprint on the table, not on the object's own spot, supported fraction, 10 mm clearance ring around the object, boxes around the open fingers (closing axis = world x, verified with tf2_echo), carry margin, collision-checked IK at pick, transit (z 0.40) and release heights.
+- Topics: `/place/click` and `/place/clear` (in), `/place/state` (out). `/pick_place_command` also accepts `{"object": "red_cube", "goal": {"x": 0.45, "y": 0.30}}`.
+- Test helper without browser or gestures: `scripts/place_cli.py` (`state | click | worldclick | clear | objs | run`). Read-only probes: `scripts/place_probe.py`, `scripts/pnp_probe.py`.
+
+Measured in simulation, 31 Oct - 1 Nov 2026: seven placements, measured by the detector at the next look, landed within 5 mm of the goal (largest: 3 mm in x and 4 mm in y) and rested flat (detected top z 0.250 on the table, 0.300 red on green, 0.310 red on blue, 0.310 blue on red). Refusals happened before any grasp: a goal 10 mm from the blue cylinder, and the four goals tested at x = 0.815 or beyond (IK fails at the 0.40 m transit height). A stop gesture aborted a run twice.
+
+Known limits: the held object stays in the gripper if a run is aborted mid-carry; the transit height is fixed at 0.40 m, which limits the reachable goals; the 10 mm / 5 mm margins are not tuned; the goal checks are duplicated in `scripts/place_probe.py`.

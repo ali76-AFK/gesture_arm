@@ -40,6 +40,11 @@
   .wp.ok { background:var(--ok); }
   .wp.no { background:var(--bad); }
   .wp.unk { background:#8a8f98; }
+  #ovl { position:absolute; inset:0; pointer-events:none; }
+  .ring { position:absolute; aspect-ratio:1; transform:translate(-50%,-50%); border-radius:50%; display:none; }
+  .ring.sel { border:3px solid var(--accent); box-shadow:0 0 12px var(--accent); }
+  .ring.goal { border:3px dashed #8a8f98; }
+  .ring.goal.ok { border-color:var(--ok); } .ring.goal.warn { border-color:#e0a030; } .ring.goal.no { border-color:var(--bad); }
 </style>
 </head>
 <body>
@@ -51,6 +56,7 @@
   <span class="badge">Esc turns hand control off</span>
   <label class="badge"><input type="checkbox" id="dwellOn"> dwell select (1 s on a card or robot-image object)</label>
   <label class="badge"><input type="checkbox" id="gotoOn"> go-to mode (clicks on the robot image set waypoints)</label>
+  <label class="badge"><input type="checkbox" id="placeOn" checked> place mode (with an object selected, the next click on the robot image sets where to put it)</label>
   <span class="badge" id="hrate">hand_state: -</span>
   <button class="badge" id="anchorTest">anchor test (8 s)</button>
 </header>
@@ -63,8 +69,8 @@
   </section>
   <section>
     <div class="panel"><h2>Robot camera</h2>
-      <div class="vid"><img id="rcam" class="clickable" alt="waiting for the detector feed"><div id="wpl"></div></div>
-      <div class="cap">Click near an object to select it. Pick it with a left thumbs up or the Confirm button.</div></div>
+      <div class="vid"><img id="rcam" class="clickable" alt="waiting for the detector feed"><div id="wpl"></div><div id="ovl"></div></div>
+      <div class="cap" id="rcap">Click near an object to select it. Pick it with a left thumbs up or the Confirm button.</div></div>
     <div class="panel"><h2>Log</h2><div id="log"></div></div>
   </section>
   <section>
@@ -76,6 +82,14 @@
       <div class="kv"><span>expires in</span><b id="ttl">-</b></div>
       <div id="objs" style="margin-top:6px"></div>
       <button id="confirm" style="width:100%">Confirm pick (same as left thumbs up)</button></div>
+    <div class="panel"><h2>Place goal</h2>
+      <div class="kv"><span>object</span><b id="pobj">-</b></div>
+      <div class="kv"><span>goal</span><b id="pgoal">-</b></div>
+      <div class="kv"><span>surface</span><b id="pwhat">-</b></div>
+      <div class="kv"><span>release z</span><b id="pz">-</b></div>
+      <div class="kv"><span>check</span><b id="pchk">-</b></div>
+      <div class="cap" id="pmsg"></div>
+      <button class="clickable" id="pClear" style="margin-top:6px">Clear goal</button></div>
     <div class="panel"><h2>Go-to</h2>
       <div class="kv"><span>status</span><b id="gstatus">-</b></div>
       <div class="kv"><span>waypoints</span><b id="gwps">0</b></div>
@@ -372,5 +386,6 @@ setInterval(() => {
   renderSel();
 }, 500);
 </script>
+<script src="place.js"></script>
 </body>
 </html>
