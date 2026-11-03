@@ -3,6 +3,10 @@
 Simulated UR5e arm with a two-finger gripper, driven by ROS 2 Jazzy, Gazebo Harmonic and MoveIt 2, all inside Docker.
 The goal is to control the arm with hand gestures seen by a laptop webcam. The gesture side is not built yet (see Status).
 
+<p align="center">
+  <img src="./project-1.png" alt="" width="900">
+</p>
+
 ## Tested on
 
 One machine only: Ubuntu 24.04, Docker 29.9.1 with Compose v5, Intel Arc integrated GPU (Mesa), an X11/XWayland session and a built-in webcam at `/dev/video0`. Other setups are untested.
